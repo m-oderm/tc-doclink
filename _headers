@@ -1,0 +1,8 @@
+# Trimble Connect lädt das Manifest cross-origin -> CORS erlauben
+/manifest.json
+  Access-Control-Allow-Origin: *
+  Access-Control-Allow-Methods: GET, OPTIONS
+  Cache-Control: no-store
+
+/icon.svg
+  Access-Control-Allow-Origin: *

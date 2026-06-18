@@ -1,0 +1,8 @@
+{
+  "title": "Dokumenten-Verknüpfer",
+  "description": "Verknüpft ein angewähltes Bauteil mit dem zugehörigen Dokument (z. B. Stahlliste) und öffnet es.",
+  "icon": "https://DEINE-DOMAIN.pages.dev/icon.svg",
+  "url": "https://DEINE-DOMAIN.pages.dev/index.html",
+  "configCommand": "open_config",
+  "enabled": true
+}

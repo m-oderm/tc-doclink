@@ -1,0 +1,396 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Dokumenten-Verknüpfer</title>
+<script src="https://components.connect.trimble.com/trimble-connect-workspace-api/index.js"></script>
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #1f2933;
+    --muted: #6b7682;
+    --line: #e1e6ea;
+    --accent: #1c5d99;
+    --accent-fg: #ffffff;
+    --ok: #1f7a4d;
+    --warn: #9a6700;
+    --field: #f4f6f8;
+    --radius: 10px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1b1f23; --fg: #e6eaed; --muted: #9aa4ad; --line: #2c333a;
+      --accent: #4a9fe0; --field: #23292f;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg); color: var(--fg);
+    font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 560px; margin: 0 auto; padding: 16px; }
+  header { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+  header h1 { font-size: 17px; margin: 0; font-weight: 650; }
+  header .sub { color: var(--muted); font-size: 13px; }
+  .card {
+    border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 16px; margin-bottom: 12px; background: var(--bg);
+  }
+  .row { margin-bottom: 12px; }
+  label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 5px; }
+  input[type=text], select {
+    width: 100%; padding: 11px 12px; font-size: 15px;
+    border: 1px solid var(--line); border-radius: 8px;
+    background: var(--field); color: var(--fg);
+  }
+  button {
+    font: inherit; font-weight: 600; cursor: pointer;
+    border: 1px solid transparent; border-radius: 8px;
+    padding: 12px 16px; min-height: 46px; /* tablet-tauglich */
+  }
+  button.primary { background: var(--accent); color: var(--accent-fg); width: 100%; }
+  button.ghost { background: transparent; border-color: var(--line); color: var(--fg); }
+  button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+  .result-name { font-weight: 650; word-break: break-word; }
+  .badge { display:inline-block; font-size:12px; padding:2px 8px; border-radius:999px; background:var(--field); color:var(--muted); }
+  .key { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .hint { color: var(--muted); font-size: 13px; }
+  .ok { color: var(--ok); }
+  .warn { color: var(--warn); }
+  .empty { text-align:center; color: var(--muted); padding: 28px 8px; }
+  .stack > * + * { margin-top: 10px; }
+  .hidden { display: none !important; }
+  .spinner { width:18px;height:18px;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;display:inline-block;vertical-align:-3px;animation:spin .7s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <img src="icon.svg" width="22" height="22" alt="" />
+    <div>
+      <h1>Dokumenten-Verknüpfer</h1>
+      <div class="sub" id="proj-sub">verbinde…</div>
+    </div>
+  </header>
+
+  <!-- LAUFZEIT-ANSICHT -->
+  <section id="view-runtime">
+    <div class="card">
+      <button class="primary" id="btn-lookup">Liste zum gewählten Bauteil anzeigen</button>
+      <p class="hint" style="margin:10px 0 0">
+        Bauteil im 3D-Modell antippen, dann tippen — oder automatisch bei jeder Auswahl.
+      </p>
+    </div>
+    <div id="runtime-out"></div>
+  </section>
+
+  <!-- KONFIG-ANSICHT -->
+  <section id="view-config" class="hidden">
+    <div class="card stack">
+      <div class="row">
+        <label>1. Schlüssel-Attribut wählen</label>
+        <button class="ghost" id="btn-load-attrs">Attribute aus gewähltem Bauteil laden</button>
+        <select id="cfg-attr" style="margin-top:10px"><option value="">— erst Bauteil wählen und laden —</option></select>
+        <p class="hint" id="attr-hint"></p>
+      </div>
+      <div class="row">
+        <label for="cfg-folder">2. Ordner-ID mit den Listen</label>
+        <input type="text" id="cfg-folder" placeholder="z. B. aBcD123..." />
+        <p class="hint">Die Ordner-ID findest du in der URL des Datei-Explorers in Trimble (…/folder/<b>ID</b>).</p>
+      </div>
+      <div class="row">
+        <label for="cfg-match">3. Abgleich</label>
+        <select id="cfg-match">
+          <option value="exact">Dateiname = Attributwert (ohne Endung)</option>
+          <option value="contains">Dateiname enthält Attributwert</option>
+        </select>
+      </div>
+      <button class="primary" id="btn-save">Speichern</button>
+      <p class="hint" id="save-hint"></p>
+    </div>
+  </section>
+</div>
+
+<script>
+"use strict";
+
+const App = {
+  api: null,
+  token: null,
+  projectId: null,
+  config: null,        // { projectId, rules: [ {pset, attribute, targetFolderId, matchMode} ] }
+  view: "runtime",
+};
+
+const $ = (id) => document.getElementById(id);
+
+// ---------- Start ----------
+(async function init() {
+  try {
+    App.api = await TrimbleConnectWorkspace.connect(window.parent, onEvent, 30000);
+  } catch (e) {
+    $("proj-sub").textContent = "Verbindung zu Trimble fehlgeschlagen.";
+    return;
+  }
+
+  // Linkes Menü setzen
+  try {
+    App.api.ui.setMenu({
+      title: "Doku-Verknüpfer",
+      icon: location.origin + "/icon.svg",
+      command: "doclink_main",
+      subMenus: [],
+    });
+  } catch (_) {}
+
+  // Projektkontext
+  try {
+    const proj = await App.api.project.getCurrentProject();
+    App.projectId = proj && (proj.id || proj.projectId);
+    $("proj-sub").textContent = proj ? (proj.name || App.projectId) : "kein Projekt";
+  } catch (_) {
+    $("proj-sub").textContent = "Projekt nicht lesbar";
+  }
+
+  await requestToken();
+  await loadConfig();
+  bindUI();
+  showRuntime();
+})();
+
+// ---------- Events von Trimble ----------
+function onEvent(event, data) {
+  if (event === "extension.command") {
+    const cmd = data && data.data;
+    if (cmd === "open_config") showConfig();
+    else if (cmd === "doclink_main") showRuntime();
+  } else if (event === "extension.accessToken") {
+    const t = data && data.data;
+    if (t && t !== "pending" && t !== "denied") App.token = t;
+  } else if (/selection/i.test(event)) {
+    // Auto-Trigger bei Auswahlwechsel. Exakter Event-Name variiert je nach
+    // Viewer-Version -> bewusst lose gematcht; der Button funktioniert unabhängig.
+    if (App.view === "runtime" && App.config) lookupSelected();
+  }
+}
+
+async function requestToken() {
+  try {
+    const res = await App.api.extension.requestPermission("accesstoken");
+    if (res && res !== "pending" && res !== "denied") App.token = res;
+  } catch (_) { /* Token kommt sonst per Event */ }
+}
+
+// ---------- Konfiguration laden/speichern ----------
+async function loadConfig() {
+  if (!App.projectId) return;
+  try {
+    const r = await fetch("/api/config/" + encodeURIComponent(App.projectId));
+    if (r.ok) {
+      const j = await r.json();
+      App.config = (j && j.rules && j.rules.length) ? j : null;
+    }
+  } catch (_) {}
+}
+
+async function saveConfig(rule) {
+  const payload = { projectId: App.projectId, rules: [rule] };
+  const r = await fetch("/api/config/" + encodeURIComponent(App.projectId), {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!r.ok) throw new Error("Speichern fehlgeschlagen (" + r.status + ")");
+  App.config = payload;
+}
+
+// ---------- Laufzeit: Bauteil -> Dokument ----------
+async function lookupSelected() {
+  const out = $("runtime-out");
+  if (!App.config) {
+    out.innerHTML = card('<div class="empty">Noch nicht konfiguriert.<br>'
+      + '<span class="hint">Zahnrad in den Extension-Einstellungen öffnen.</span></div>');
+    return;
+  }
+  out.innerHTML = card('<span class="spinner"></span> &nbsp;Suche Dokument…');
+
+  try {
+    const sel = await App.api.viewer.getSelection();
+    if (!sel || !sel.length || !sel[0].objectRuntimeIds || !sel[0].objectRuntimeIds.length) {
+      out.innerHTML = card('<div class="empty">Kein Bauteil ausgewählt.</div>');
+      return;
+    }
+    const rule = App.config.rules[0];
+    const modelId = sel[0].modelId;
+    const runtimeId = sel[0].objectRuntimeIds[0];
+
+    const props = await App.api.viewer.getObjectProperties(modelId, [runtimeId]);
+    const key = extractValue(props, rule.pset, rule.attribute);
+
+    if (!key) {
+      out.innerHTML = card('<div class="warn">Kein Schlüssel im Attribut <b>'
+        + esc(rule.pset) + " › " + esc(rule.attribute) + "</b> an diesem Bauteil.</div>");
+      return;
+    }
+
+    const file = await findFile(rule.targetFolderId, key, rule.matchMode);
+    if (!file) {
+      out.innerHTML = card('<div class="warn">Keine Liste zu Schlüssel '
+        + '<span class="key">' + esc(key) + "</span> gefunden.</div>");
+      return;
+    }
+    showResult(key, file);
+  } catch (e) {
+    out.innerHTML = card('<div class="warn">Fehler: ' + esc(e.message || String(e)) + "</div>");
+  }
+}
+
+function showResult(key, file) {
+  const openUrl = file.webUrl
+    || ("https://web.connect.trimble.com/projects/" + App.projectId + "/data/files/" + file.id);
+  $("runtime-out").innerHTML = card(
+      '<div class="badge">Schlüssel <span class="key">' + esc(key) + "</span></div>"
+    + '<div class="result-name" style="margin:8px 0">' + esc(file.name) + "</div>"
+    + '<a href="' + esc(openUrl) + '" target="_blank" rel="noopener">'
+    + '<button class="primary">Dokument öffnen</button></a>'
+  );
+}
+
+// Defensiver Durchlauf durch die ObjectProperties-Struktur
+function extractValue(propsArray, psetName, attrName) {
+  for (const obj of propsArray || []) {
+    const sets = obj.properties || obj.propertySets || [];
+    for (const set of sets) {
+      if (psetName && set.name !== psetName) continue;
+      const list = set.properties || [];
+      for (const p of list) {
+        if (p.name === attrName && p.value != null && String(p.value).trim() !== "") {
+          return String(p.value).trim();
+        }
+      }
+    }
+  }
+  return "";
+}
+
+async function findFile(folderId, key, matchMode) {
+  const r = await fetch("/api/files?folderId=" + encodeURIComponent(folderId), {
+    headers: { Authorization: "Bearer " + (App.token || "") },
+  });
+  if (!r.ok) throw new Error("Ordner nicht lesbar (" + r.status + ")");
+  const items = await r.json();
+  const files = (items || []).filter((i) => i.type !== "FOLDER");
+  const n = (s) => String(s || "").toLowerCase();
+  const stripExt = (s) => String(s || "").replace(/\.[^.]+$/, "");
+
+  if (matchMode === "contains") {
+    return files.find((f) => n(f.name).includes(n(key)));
+  }
+  return files.find((f) => n(stripExt(f.name)) === n(key))
+      || files.find((f) => n(f.name).includes(n(key)));
+}
+
+// ---------- Konfig-Ansicht ----------
+async function loadAttributeChoices() {
+  const hint = $("attr-hint");
+  hint.textContent = "lese Auswahl…";
+  try {
+    const sel = await App.api.viewer.getSelection();
+    if (!sel || !sel.length || !sel[0].objectRuntimeIds.length) {
+      hint.textContent = "Kein Bauteil ausgewählt — im Modell eines antippen.";
+      return;
+    }
+    const props = await App.api.viewer.getObjectProperties(
+      sel[0].modelId, [sel[0].objectRuntimeIds[0]]);
+
+    const sel2 = $("cfg-attr");
+    sel2.innerHTML = '<option value="">— Attribut wählen —</option>';
+    let count = 0;
+    for (const obj of props || []) {
+      for (const set of (obj.properties || obj.propertySets || [])) {
+        for (const p of (set.properties || [])) {
+          const opt = document.createElement("option");
+          opt.value = JSON.stringify({ pset: set.name, attribute: p.name });
+          const val = p.value != null ? String(p.value) : "";
+          opt.textContent = set.name + " › " + p.name + (val ? "  (" + val.slice(0, 24) + ")" : "");
+          sel2.appendChild(opt);
+          count++;
+        }
+      }
+    }
+    hint.textContent = count + " Attribute geladen.";
+  } catch (e) {
+    hint.textContent = "Fehler: " + (e.message || e);
+  }
+}
+
+async function onSave() {
+  const sh = $("save-hint");
+  const raw = $("cfg-attr").value;
+  const folder = $("cfg-folder").value.trim();
+  if (!raw) { sh.textContent = "Bitte ein Attribut wählen."; sh.className = "hint warn"; return; }
+  if (!folder) { sh.textContent = "Bitte eine Ordner-ID eintragen."; sh.className = "hint warn"; return; }
+  const { pset, attribute } = JSON.parse(raw);
+  const rule = { pset, attribute, targetFolderId: folder, matchMode: $("cfg-match").value };
+  try {
+    await saveConfig(rule);
+    sh.textContent = "Gespeichert.";
+    sh.className = "hint ok";
+  } catch (e) {
+    sh.textContent = e.message;
+    sh.className = "hint warn";
+  }
+}
+
+// ---------- Ansicht wechseln ----------
+function showRuntime() {
+  App.view = "runtime";
+  $("view-runtime").classList.remove("hidden");
+  $("view-config").classList.add("hidden");
+  const out = $("runtime-out");
+  if (!App.config) {
+    out.innerHTML = card('<div class="empty">Noch nicht konfiguriert.<br>'
+      + '<span class="hint">Zahnrad in den Extension-Einstellungen öffnen.</span></div>');
+  } else {
+    out.innerHTML = "";
+  }
+}
+
+function showConfig() {
+  App.view = "config";
+  $("view-config").classList.remove("hidden");
+  $("view-runtime").classList.add("hidden");
+  if (App.config && App.config.rules[0]) {
+    const r = App.config.rules[0];
+    $("cfg-folder").value = r.targetFolderId || "";
+    $("cfg-match").value = r.matchMode || "exact";
+    const sel2 = $("cfg-attr");
+    const opt = document.createElement("option");
+    opt.value = JSON.stringify({ pset: r.pset, attribute: r.attribute });
+    opt.textContent = r.pset + " › " + r.attribute + " (aktuell)";
+    opt.selected = true;
+    sel2.innerHTML = "";
+    sel2.appendChild(opt);
+  }
+}
+
+function bindUI() {
+  $("btn-lookup").addEventListener("click", lookupSelected);
+  $("btn-load-attrs").addEventListener("click", loadAttributeChoices);
+  $("btn-save").addEventListener("click", onSave);
+}
+
+// ---------- Helfer ----------
+function card(inner) { return '<div class="card">' + inner + "</div>"; }
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+</script>
+</body>
+</html>

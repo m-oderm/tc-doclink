@@ -1,0 +1,14 @@
+name = "tc-doclink"
+compatibility_date = "2024-09-23"
+pages_build_output_dir = "."
+
+# KV für die Pro-Projekt-Konfiguration.
+# ID nach `wrangler kv namespace create CONFIG_KV` hier eintragen
+# (oder im Pages-Dashboard unter Settings -> Functions -> KV namespace bindings binden).
+[[kv_namespaces]]
+binding = "CONFIG_KV"
+id = "DEINE_KV_NAMESPACE_ID"
+
+[vars]
+# ⚠️ Region-Host EURES Projekts. NA-Master als Platzhalter – für CH/EU ersetzen!
+CORE_API_BASE = "https://app.connect.trimble.com/tc/api/2.0"
