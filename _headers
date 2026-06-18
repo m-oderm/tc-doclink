@@ -1,3 +1,11 @@
+# Basis-Sicherheits-Header für alle Routen (funktionsneutral).
+# HINWEIS: Content-Security-Policy und frame-ancestors sind bewusst NICHT hier,
+# da sie gegen die echte Trimble-Einbettung live getestet werden müssen
+# (sonst lädt die Erweiterung im iFrame evtl. nicht mehr / Inline-Script wird blockiert).
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+
 # Trimble Connect lädt das Manifest cross-origin -> CORS erlauben
 /manifest.json
   Access-Control-Allow-Origin: *
