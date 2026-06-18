@@ -11,4 +11,4 @@ id = "dfcf09b29c4449f2a87d256644688c5e"
 
 [vars]
 # ⚠️ Region-Host EURES Projekts. NA-Master als Platzhalter – für CH/EU ersetzen!
-CORE_API_BASE = "https://app.connect.trimble.com/tc/api/2.0"
+CORE_API_BASE = "https://app21.connect.trimble.com/tc/api/2.0"
