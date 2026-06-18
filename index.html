@@ -254,8 +254,10 @@ async function lookupSelected() {
 }
 
 function showResult(key, file) {
-  const openUrl = file.webUrl
-    || ("https://web.connect.trimble.com/projects/" + App.projectId + "/data/files/" + file.id);
+  // 2D-Viewer-Link (PDF/Zeichnungen). Der data/files-Pfad öffnet nur ein leeres Fenster.
+  const fid = encodeURIComponent(file.id);
+  const openUrl = "https://web.connect.trimble.com/projects/" + App.projectId
+    + "/viewer/2D?id=" + fid + "&version=" + fid + "&type=revisions&etag=" + fid;
   $("runtime-out").innerHTML = card(
       '<div class="badge">Schlüssel <span class="key">' + esc(key) + "</span></div>"
     + '<div class="result-name" style="margin:8px 0">' + esc(file.name) + "</div>"

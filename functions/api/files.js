@@ -1,13 +1,10 @@
 // GET /api/files?folderId=...   (Authorization: Bearer <trimble-token>)
-// Reicht den Token an die Trimble Core-API durch und listet den Ordnerinhalt.
-// Antwort: [ { id, name, type ("FILE"|"FOLDER"), versionId, size } ]
+// Durchsucht den angegebenen Ordner REKURSIV (inkl. Unterordner) und liefert
+// eine flache Liste aller Dateien: [ { id, name, type:"FILE", versionId } ]
 //
-// ⚠️ ZWEI STELLEN GEGEN EURE UMGEBUNG PRÜFEN:
-//   1) CORE_API_BASE = Region-Host eures Projekts (CH/EU != NA-Master!).
-//      In wrangler.toml bzw. im Pages-Dashboard als Variable setzen.
-//   2) Der Items-Pfad (/folders/{id}/items) entspricht dem TC-API-2.0-Muster –
-//      gegen die offizielle Core-API-Spec verifizieren:
-//      https://developer.trimble.com/docs/connect/core-api/
+// ⚠️ Region-Host (CORE_API_BASE) gegen euer Projekt prüfen (CH/EU = app21).
+// ⚠️ Items-Pfad /folders/{id}/items gegen die Core-API-Spec verifizieren:
+//    https://developer.trimble.com/docs/connect/core-api/
 
 export async function onRequest(context) {
   const { request, env } = context;
@@ -21,28 +18,50 @@ export async function onRequest(context) {
   const base = (env.CORE_API_BASE || "").replace(/\/+$/, "");
   if (!base) return jsonResp({ error: "CORE_API_BASE nicht konfiguriert" }, 500);
 
-  const tcUrl = base + "/folders/" + encodeURIComponent(folderId) + "/items";
+  const MAX_DEPTH = 6;     // Schachtelungstiefe begrenzen
+  const MAX_CALLS = 45;    // unter dem Cloudflare-Free-Limit (50 Subrequests/Request)
+  let calls = 0;
+  const files = [];
 
-  let r;
+  async function listFolder(id, depth) {
+    if (depth > MAX_DEPTH || calls >= MAX_CALLS) return;
+    calls++;
+    const r = await fetch(base + "/folders/" + encodeURIComponent(id) + "/items",
+      { headers: { Authorization: auth, Accept: "application/json" } });
+    if (!r.ok) {
+      if (depth === 0) throw new Error("Core-API " + r.status + ": " + (await safeText(r)));
+      return; // Fehler in Unterordnern ignorieren, oben weitersuchen
+    }
+    const data = await r.json();
+    const items = Array.isArray(data) ? data : (data.items || data.data || []);
+    const subfolders = [];
+    for (const i of items) {
+      const isFolder = String(i.type || "").toUpperCase().includes("FOLDER");
+      if (isFolder) {
+        subfolders.push(i.id);
+      } else {
+        files.push({
+          id: i.id,
+          name: i.name || i.title,
+          type: "FILE",
+          versionId: i.versionId || (i.version && i.version.id),
+        });
+      }
+    }
+    for (const sub of subfolders) {
+      if (calls >= MAX_CALLS) break;
+      await listFolder(sub, depth + 1);
+    }
+  }
+
   try {
-    r = await fetch(tcUrl, { headers: { Authorization: auth, Accept: "application/json" } });
+    await listFolder(folderId, 0);
   } catch (e) {
-    return jsonResp({ error: "Core-API nicht erreichbar", detail: String(e) }, 502);
-  }
-  if (!r.ok) {
-    return jsonResp({ error: "Core-API Fehler", status: r.status, detail: await safeText(r) }, r.status);
+    return jsonResp({ error: String(e.message || e) }, 502);
   }
 
-  const data = await r.json();
-  const items = Array.isArray(data) ? data : (data.items || data.data || []);
-  const norm = items.map((i) => ({
-    id: i.id,
-    name: i.name || i.title,
-    type: (i.type || "").toUpperCase().includes("FOLDER") ? "FOLDER" : "FILE",
-    versionId: i.versionId || (i.version && i.version.id),
-    size: i.size,
-  }));
-  return jsonResp(norm, 200);
+  // flache Liste -> Frontend filtert/matcht unverändert weiter
+  return jsonResp(files, 200);
 }
 
 function jsonResp(obj, status) {
