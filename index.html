@@ -178,6 +178,7 @@ const App = {
   selectedFolderId: null,
   selectedFolderName: "",
   modelLists: null,    // gecachtes Ergebnis des Modell-Scans: [{key, file}]
+  attrDecimals: null,  // aus der Mehrheit der Werte abgeleitete Nachkommastellen
 };
 
 const $ = (id) => document.getElementById(id);
@@ -326,6 +327,9 @@ async function showModelLists(force) {
       }
     }
 
+    // Genauigkeit aus der Mehrheit der Modellwerte ableiten (Ausreisser/Float-Rauschen normalisieren)
+    App.attrDecimals = modalDecimals([...keys]);
+
     // im Modell vorkommende Werte -> passende Dateien (nach Datei dedupliziert)
     const seen = new Set();
     const result = [];
@@ -380,7 +384,7 @@ async function lookupSelected(sel) {
     const file = await findFile(rule.targetFolderId, key, rule.matchMode);
     if (!file) {
       out.innerHTML = card('<div class="warn">Keine Liste zu Schlüssel '
-        + '<span class="key">' + esc(key) + "</span> gefunden.</div>" + backLink());
+        + '<span class="key">' + esc(displayKey(key)) + "</span> gefunden.</div>" + backLink());
       return;
     }
     showResult(key, file);
@@ -407,7 +411,7 @@ function notConfigured() {
 
 function showResult(key, file) {
   $("runtime-out").innerHTML = card(
-      '<div class="badge">Schlüssel <span class="key">' + esc(key) + "</span></div>"
+      '<div class="badge">Schlüssel <span class="key">' + esc(displayKey(key)) + "</span></div>"
     + '<div class="result-name" style="margin:8px 0">' + esc(file.name) + "</div>"
     + '<a href="' + esc(open2DUrl(file.id)) + '" target="_blank" rel="noopener">'
     + '<button class="primary">Dokument öffnen</button></a>'
@@ -455,12 +459,68 @@ async function ensureFileIndex(folderId, force) {
   finally { App._indexPromise = null; }
 }
 
+// Erzeugt Match-Kandidaten für einen Schlüssel und behebt dabei Float-Fehler
+// (z. B. "14.129999999999999" -> "14.13", "9.998999999999999" -> "9.999")
+// ohne echte Nachkommastellen zu verlieren, plus Variante mit führender Null
+// für Dateinamen wie "09.999".
+function keyCandidates(key) {
+  const raw = String(key == null ? "" : key).trim();
+  const set = new Set([raw]);
+  if (/^-?\d+(\.\d+)?$/.test(raw)) {
+    const num = Number(raw);
+    if (!isNaN(num)) {
+      // toFixed(6) entfernt das Float-Rauschen (~13.+ Stelle), echte Stellen bleiben
+      addNumVariants(set, String(parseFloat(num.toFixed(6)))); // "9.999" / "14.13"
+      // Genauigkeit aus der Mehrheit der Modellwerte (sonst 3 als sinnvoller Default)
+      const D = (App.attrDecimals != null) ? App.attrDecimals : 3;
+      addNumVariants(set, num.toFixed(D));                     // feste D Stellen, z. B. "9.999"
+      addNumVariants(set, String(parseFloat(num.toFixed(D)))); // ohne überflüssige Nullen
+    }
+  }
+  return [...set].filter(Boolean);
+}
+
+// Ermittelt die häufigste Nachkommastellen-Anzahl unter den "sauberen" Werten
+// (Float-Rauschen mit langer Ziffernkette wird ignoriert). So definiert die
+// Mehrheit die erwartete Genauigkeit, auf die Ausreisser normalisiert werden.
+function modalDecimals(values) {
+  const counts = {};
+  for (const v of values || []) {
+    const m = String(v == null ? "" : v).trim().match(/^-?\d+\.(\d+)$/);
+    if (m && m[1].length <= 6) counts[m[1].length] = (counts[m[1].length] || 0) + 1;
+  }
+  let best = null, bestN = -1;
+  for (const d in counts) if (counts[d] > bestN) { bestN = counts[d]; best = Number(d); }
+  return best; // null, wenn keine numerischen Werte vorliegen
+}
+
+// Fügt einen Zahl-String hinzu sowie – bei einstelligem Ganzzahlteil – die
+// Variante mit führender Null (z. B. "9.999" -> auch "09.999").
+function addNumVariants(set, v) {
+  set.add(v);
+  const m = v.match(/^(-?)(\d+)(\.\d+)?$/);
+  if (m && m[2].length < 2) set.add(m[1] + m[2].padStart(2, "0") + (m[3] || ""));
+}
+
 function matchInIndex(files, key, matchMode) {
   const n = (s) => String(s || "").toLowerCase();
   const stripExt = (s) => String(s || "").replace(/\.[^.]+$/, "");
-  if (matchMode === "contains") return files.find((f) => n(f.name).includes(n(key)));
-  return files.find((f) => n(stripExt(f.name)) === n(key))
-      || files.find((f) => n(f.name).includes(n(key)));
+  const cands = keyCandidates(key).map(n);
+  if (matchMode === "contains") {
+    return files.find((f) => cands.some((c) => c && n(f.name).includes(c)));
+  }
+  return files.find((f) => cands.some((c) => c && n(stripExt(f.name)) === c))
+      || files.find((f) => cands.some((c) => c && n(f.name).includes(c)));
+}
+
+// Schlüssel für die Anzeige bereinigen — nur offensichtliches Float-Rauschen.
+function displayKey(key) {
+  const raw = String(key == null ? "" : key).trim();
+  if (/^-?\d+\.\d*(9{4,}|0{4,})\d?$/.test(raw)) {
+    const num = Number(raw);
+    if (!isNaN(num)) return String(parseFloat(num.toFixed(6)));
+  }
+  return raw;
 }
 
 async function findFile(folderId, key, matchMode) {
