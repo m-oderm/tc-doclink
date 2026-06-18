@@ -227,21 +227,50 @@ function renderModelLists(result) {
     return;
   }
   let html = '<div class="badge">' + result.length + " Listen im Modell</div>"
-    + '<p class="hint" style="margin:8px 0 10px">Name antippen öffnet die Liste · Button wählt die Bauteile im Modell.</p>'
-    + '<div class="listrows">';
+    + '<input type="search" id="list-search" placeholder="Liste suchen (Name oder Nummer)…" autocomplete="off" />'
+    + '<p class="hint" style="margin:6px 0 10px">Name antippen öffnet die Liste · Button wählt die Bauteile im Modell.</p>'
+    + '<div class="listrows" id="listrows">';
   for (const r of result) {
     const objs = (App.fileObjects && App.fileObjects.get(r.file.id)) || [];
-    html += '<div class="listrow">'
+    const date = fmtDate(r.file.modified);
+    const hay = esc((r.file.name + " " + (r.key || "")).toLowerCase());
+    html += '<div class="listrow" data-hay="' + hay + '">'
+      + '<div class="listrow-main">'
       + '<a class="listrow-name" href="' + esc(open2DUrl(r.file.id)) + '" target="_blank" rel="noopener" title="Liste öffnen">'
       + esc(r.file.name) + "</a>"
+      + (date ? '<span class="listrow-date">geändert ' + esc(date) + "</span>" : "")
+      + "</div>"
       + '<button class="selbtn js-select" type="button" data-fileid="' + esc(r.file.id) + '"'
       + (objs.length ? "" : " disabled")
       + ' title="Zugehörige Bauteile im Modell anwählen">' + SEL_ICON
       + "<span>" + (objs.length || 0) + "</span></button>"
       + "</div>";
   }
-  html += "</div>";
+  html += '</div><p class="hint hidden" id="list-empty" style="margin-top:10px">Keine Liste passt zur Suche.</p>';
   out.innerHTML = card(html);
+
+  const search = $("list-search");
+  if (search) {
+    search.addEventListener("input", () => {
+      const q = search.value.trim().toLowerCase();
+      let shown = 0;
+      document.querySelectorAll("#listrows .listrow").forEach((el) => {
+        const match = !q || (el.getAttribute("data-hay") || "").includes(q);
+        el.classList.toggle("hidden", !match);
+        if (match) shown++;
+      });
+      $("list-empty").classList.toggle("hidden", shown !== 0);
+    });
+  }
+}
+
+// ISO-Datum -> "TT.MM.JJJJ" (leer, wenn ungültig/fehlend)
+function fmtDate(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  const p = (n) => String(n).padStart(2, "0");
+  return p(d.getDate()) + "." + p(d.getMonth() + 1) + "." + d.getFullYear();
 }
 
 // Genau eine Liste zum gewählten Bauteil
@@ -356,8 +385,9 @@ async function ensureFileIndex(folderId, force) {
   }
   if (App.fileIndex) return App.fileIndex;
   if (!App._indexPromise) {
+    const skip = (App.config && App.config.rules[0] && App.config.rules[0].skipArchive === "1") ? "&skipArchive=1" : "";
     App._indexPromise = (async () => {
-      const r = await fetch("/api/files?folderId=" + encodeURIComponent(folderId), {
+      const r = await fetch("/api/files?folderId=" + encodeURIComponent(folderId) + skip, {
         headers: { Authorization: "Bearer " + (App.token || "") },
       });
       if (!r.ok) throw new Error("Ordner nicht lesbar (" + r.status + ")");
@@ -603,6 +633,7 @@ async function onSave() {
     targetFolderName: App.selectedFolderName || "",
     matchMode: $("cfg-match").value,
     fileType: $("cfg-filetype").value,
+    skipArchive: $("cfg-skiparchive").value,
   };
   try {
     await saveConfig(rule);
@@ -712,6 +743,7 @@ function showConfig() {
     $("folder-display").textContent = App.selectedFolderName || "— kein Ordner gewählt —";
     $("cfg-match").value = r.matchMode || "exact";
     $("cfg-filetype").value = r.fileType || "all";
+    $("cfg-skiparchive").value = r.skipArchive || "1";
     App.selectedAttr = { pset: r.pset, attribute: r.attribute };
     $("cfg-attr-search").value = r.pset + " › " + r.attribute;
   }

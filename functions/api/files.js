@@ -1,15 +1,19 @@
-// GET /api/files?folderId=...   (Authorization: Bearer <trimble-token>)
-// Durchsucht den angegebenen Ordner REKURSIV (inkl. Unterordner) und liefert
-// eine flache Liste aller Dateien: [ { id, name, type:"FILE", versionId } ]
+// GET /api/files?folderId=...&skipArchive=1   (Authorization: Bearer <trimble-token>)
+// Durchsucht den angegebenen Ordner REKURSIV (inkl. Unterordner) und liefert eine
+// flache Liste aller Dateien: [ { id, name, type:"FILE", versionId, modified } ].
+// modified = Änderungsdatum (ISO), defensiv aus mehreren möglichen Feldern gelesen.
+// skipArchive=1 überspringt Unterordner mit Namen wie "alt", "archiv", "old", "backup".
 //
 // ⚠️ Region-Host (CORE_API_BASE) gegen euer Projekt prüfen (CH/EU = app21).
-// ⚠️ Items-Pfad /folders/{id}/items gegen die Core-API-Spec verifizieren:
-//    https://developer.trimble.com/docs/connect/core-api/
+
+// Ordnernamen, die als Archiv gelten (ganzes Wort, damit z. B. "Altbau" NICHT zählt).
+const ARCHIVE_RE = /(^|[ _\-])(alt|alte|archiv|archive|old|backup)([ _\-0-9]|$)/i;
 
 export async function onRequest(context) {
   const { request, env } = context;
   const url = new URL(request.url);
   const folderId = url.searchParams.get("folderId");
+  const skipArchive = url.searchParams.get("skipArchive") === "1";
   const auth = request.headers.get("Authorization");
 
   if (!folderId) return jsonResp({ error: "folderId fehlt" }, 400);
@@ -38,6 +42,8 @@ export async function onRequest(context) {
     for (const i of items) {
       const isFolder = String(i.type || "").toUpperCase().includes("FOLDER");
       if (isFolder) {
+        const fname = String(i.name || i.title || "");
+        if (skipArchive && ARCHIVE_RE.test(fname)) continue; // Archiv-/Alt-Ordner auslassen
         subfolders.push(i.id);
       } else {
         files.push({
@@ -45,6 +51,7 @@ export async function onRequest(context) {
           name: i.name || i.title,
           type: "FILE",
           versionId: i.versionId || (i.version && i.version.id),
+          modified: pickDate(i),
         });
       }
     }
@@ -65,6 +72,13 @@ export async function onRequest(context) {
 
   // flache Liste -> Frontend filtert/matcht unverändert weiter
   return jsonResp(files, 200);
+}
+
+// Änderungsdatum defensiv aus möglichen Feldern lesen (Feldname variiert je nach API-Version)
+function pickDate(i) {
+  const v = i.version || {};
+  return i.modifiedOn || i.versionModifiedOn || i.lastModified || i.updatedAt
+    || v.modifiedOn || v.createdOn || i.modifiedAt || i.createdOn || null;
 }
 
 function jsonResp(obj, status) {

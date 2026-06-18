@@ -6,7 +6,7 @@
 // serverseitig gegen die Projektmitgliedschaft geprüft (Core-API GET /projects/{id}).
 // Damit hängt die Konfig an derselben Berechtigung wie die Dokumente.
 
-const ALLOWED_FIELDS = ["pset", "attribute", "targetFolderId", "targetFolderName", "matchMode", "fileType"];
+const ALLOWED_FIELDS = ["pset", "attribute", "targetFolderId", "targetFolderName", "matchMode", "fileType", "skipArchive"];
 const MATCH_MODES = ["exact", "contains"];
 const FILE_TYPES = ["all", "pdf", "abs", "word", "excel"];
 const MAX_BODY = 16 * 1024; // 16 KB
@@ -48,6 +48,7 @@ export async function onRequestPut(context) {
     }
     if (out.matchMode && !MATCH_MODES.includes(out.matchMode)) return err("ungültiger matchMode", 400);
     if (out.fileType && !FILE_TYPES.includes(out.fileType)) return err("ungültiger fileType", 400);
+    if (out.skipArchive != null) out.skipArchive = (out.skipArchive === "1" || out.skipArchive === "true") ? "1" : "0";
     clean.rules.push(out);
   }
 

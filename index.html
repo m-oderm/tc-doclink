@@ -41,7 +41,7 @@
   }
   .row { margin-bottom: 12px; }
   label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 5px; }
-  input[type=text], select {
+  input[type=text], input[type=search], select {
     width: 100%; padding: 11px 12px; font-size: 15px;
     border: 1px solid var(--line); border-radius: 8px;
     background: var(--field); color: var(--fg);
@@ -94,10 +94,13 @@
   .filerow:first-child { border-top: 0; }
   .filerow:hover { text-decoration: underline; }
   .listrows { display: flex; flex-direction: column; }
-  .listrow { display: flex; align-items: center; gap: 8px; padding: 6px 2px; border-top: 1px solid var(--line); }
+  #list-search { margin: 4px 0 2px; }
+  .listrow { display: flex; align-items: center; gap: 8px; padding: 7px 2px; border-top: 1px solid var(--line); }
   .listrow:first-child { border-top: 0; }
-  .listrow-name { flex: 1; min-width: 0; color: var(--accent); text-decoration: none; font-size: 13px; line-height: 1.3; word-break: break-word; }
+  .listrow-main { flex: 1; min-width: 0; }
+  .listrow-name { display: block; color: var(--accent); text-decoration: none; font-size: 13px; line-height: 1.3; word-break: break-word; }
   .listrow-name:hover { text-decoration: underline; }
+  .listrow-date { display: block; font-size: 11px; color: var(--muted); margin-top: 2px; }
   .selbtn { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 5px; padding: 5px 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--field); color: var(--fg); font-size: 12px; cursor: pointer; width: auto; min-height: 0; white-space: nowrap; }
   .selbtn:hover { border-color: var(--accent); }
   .selbtn:disabled { opacity: .45; cursor: default; }
@@ -171,6 +174,14 @@
           <option value="word">Nur Word</option>
           <option value="excel">Nur Excel</option>
         </select>
+      </div>
+      <div class="row">
+        <label for="cfg-skiparchive">5. Archiv-/Alt-Ordner</label>
+        <select id="cfg-skiparchive">
+          <option value="1">überspringen (empfohlen)</option>
+          <option value="0">mitdurchsuchen</option>
+        </select>
+        <p class="hint">Ordner wie „alt“, „archiv“, „old“, „backup“ werden beim Suchen übersprungen, damit keine veralteten Listen erscheinen.</p>
       </div>
       <button class="primary" id="btn-save">Speichern</button>
       <p class="hint" id="save-hint"></p>
