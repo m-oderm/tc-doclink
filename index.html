@@ -67,6 +67,19 @@
   .spinner { width:18px;height:18px;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;display:inline-block;vertical-align:-3px;animation:spin .7s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
   @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
+  .combo { position: relative; }
+  .combo-results {
+    position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 30;
+    max-height: 300px; overflow-y: auto;
+    background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+    box-shadow: 0 8px 28px rgba(0,0,0,.16);
+  }
+  .combo-group { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); padding: 9px 12px 3px; position: sticky; top: 0; background: var(--bg); }
+  .combo-item { padding: 10px 12px; cursor: pointer; }
+  .combo-item:hover { background: var(--field); }
+  .combo-item .val { color: var(--muted); font-size: 12px; }
+  .combo-empty { padding: 14px 12px; color: var(--muted); font-size: 13px; }
+  .linkbtn { background: none; border: 0; color: var(--accent); padding: 0; min-height: 0; font-size: 13px; font-weight: 600; cursor: pointer; }
 </style>
 </head>
 <body>
@@ -96,10 +109,15 @@
     <button class="ghost" id="btn-back" style="margin-bottom:12px">← Zurück</button>
     <div class="card stack">
       <div class="row">
-        <label>1. Schlüssel-Attribut wählen</label>
-        <button class="ghost" id="btn-load-attrs">Attribute aus gewähltem Bauteil laden</button>
-        <select id="cfg-attr" style="margin-top:10px"><option value="">— erst Bauteil wählen und laden —</option></select>
-        <p class="hint" id="attr-hint"></p>
+        <label for="cfg-attr-search">1. Schlüssel-Attribut
+          <button class="linkbtn" id="btn-attr-reload" type="button" style="float:right">↻ aus Auswahl neu laden</button>
+        </label>
+        <div class="combo">
+          <input type="text" id="cfg-attr-search" autocomplete="off"
+                 placeholder="Name eingeben, z. B. Stahllistennummer" />
+          <div id="cfg-attr-results" class="combo-results hidden"></div>
+        </div>
+        <p class="hint" id="attr-hint">Bauteil im Modell wählen, dann hier tippen, um zu filtern.</p>
       </div>
       <div class="row">
         <label for="cfg-folder">2. Ordner-ID mit den Listen</label>
@@ -128,6 +146,8 @@ const App = {
   projectId: null,
   config: null,        // { projectId, rules: [ {pset, attribute, targetFolderId, matchMode} ] }
   view: "runtime",
+  attrChoices: [],     // zwischengespeicherte Attribute des gewählten Bauteils
+  selectedAttr: null,  // { pset, attribute }
 };
 
 const $ = (id) => document.getElementById(id);
@@ -300,48 +320,89 @@ async function findFile(folderId, key, matchMode) {
       || files.find((f) => n(f.name).includes(n(key)));
 }
 
-// ---------- Konfig-Ansicht ----------
-async function loadAttributeChoices() {
+// ---------- Konfig-Ansicht: durchsuchbare Attribut-Auswahl ----------
+// Lädt die Attribute des gewählten Bauteils EINMAL und cached sie.
+async function loadAttributeChoices(force) {
+  if (App.attrChoices.length && !force) return;
   const hint = $("attr-hint");
   hint.textContent = "lese Auswahl…";
   try {
     const sel = await App.api.viewer.getSelection();
-    if (!sel || !sel.length || !sel[0].objectRuntimeIds.length) {
-      hint.textContent = "Kein Bauteil ausgewählt — im Modell eines antippen.";
+    if (!sel || !sel.length || !sel[0].objectRuntimeIds || !sel[0].objectRuntimeIds.length) {
+      hint.textContent = "Kein Bauteil ausgewählt — eines im Modell antippen, dann ↻.";
       return;
     }
     const props = await App.api.viewer.getObjectProperties(
       sel[0].modelId, [sel[0].objectRuntimeIds[0]]);
-
-    const sel2 = $("cfg-attr");
-    sel2.innerHTML = '<option value="">— Attribut wählen —</option>';
-    let count = 0;
+    const choices = [];
     for (const obj of props || []) {
       for (const set of (obj.properties || obj.propertySets || [])) {
         for (const p of (set.properties || [])) {
-          const opt = document.createElement("option");
-          opt.value = JSON.stringify({ pset: set.name, attribute: p.name });
-          const val = p.value != null ? String(p.value) : "";
-          opt.textContent = set.name + " › " + p.name + (val ? "  (" + val.slice(0, 24) + ")" : "");
-          sel2.appendChild(opt);
-          count++;
+          choices.push({ pset: set.name, attr: p.name, value: p.value });
         }
       }
     }
-    hint.textContent = count + " Attribute geladen.";
+    App.attrChoices = choices;
+    hint.textContent = choices.length + " Attribute geladen — tippen zum Filtern.";
+    const box = $("cfg-attr-results");
+    if (box && !box.classList.contains("hidden")) renderAttrResults($("cfg-attr-search").value);
   } catch (e) {
     hint.textContent = "Fehler: " + (e.message || e);
   }
 }
 
+// Filtert die gecachten Attribute live und zeigt sie nach Pset gruppiert.
+function renderAttrResults(filter) {
+  const box = $("cfg-attr-results");
+  const f = String(filter || "").toLowerCase().trim();
+  if (!App.attrChoices.length) {
+    box.innerHTML = '<div class="combo-empty">Kein Bauteil geladen. Bauteil im Modell wählen, dann ↻.</div>';
+    box.classList.remove("hidden");
+    return;
+  }
+  const matches = App.attrChoices.filter((c) =>
+    !f || c.attr.toLowerCase().includes(f) || c.pset.toLowerCase().includes(f));
+  if (!matches.length) {
+    box.innerHTML = '<div class="combo-empty">Keine Treffer.</div>';
+    box.classList.remove("hidden");
+    return;
+  }
+  const groups = {};
+  for (const m of matches.slice(0, 80)) (groups[m.pset] = groups[m.pset] || []).push(m);
+  let html = "";
+  for (const pset of Object.keys(groups)) {
+    html += '<div class="combo-group">' + esc(pset) + "</div>";
+    for (const m of groups[pset]) {
+      const val = m.value != null ? String(m.value) : "";
+      html += '<div class="combo-item" data-pset="' + esc(m.pset) + '" data-attr="' + esc(m.attr) + '">'
+        + esc(m.attr)
+        + (val ? ' <span class="val">· ' + esc(val.slice(0, 32)) + "</span>" : "")
+        + "</div>";
+    }
+  }
+  box.innerHTML = html;
+  box.classList.remove("hidden");
+  box.querySelectorAll(".combo-item").forEach((el) => {
+    el.addEventListener("mousedown", (e) => {
+      e.preventDefault(); // vor dem blur des Inputs feuern
+      App.selectedAttr = { pset: el.getAttribute("data-pset"), attribute: el.getAttribute("data-attr") };
+      $("cfg-attr-search").value = App.selectedAttr.pset + " › " + App.selectedAttr.attribute;
+      box.classList.add("hidden");
+    });
+  });
+}
+
 async function onSave() {
   const sh = $("save-hint");
-  const raw = $("cfg-attr").value;
   const folder = $("cfg-folder").value.trim();
-  if (!raw) { sh.textContent = "Bitte ein Attribut wählen."; sh.className = "hint warn"; return; }
+  if (!App.selectedAttr) { sh.textContent = "Bitte ein Attribut wählen."; sh.className = "hint warn"; return; }
   if (!folder) { sh.textContent = "Bitte eine Ordner-ID eintragen."; sh.className = "hint warn"; return; }
-  const { pset, attribute } = JSON.parse(raw);
-  const rule = { pset, attribute, targetFolderId: folder, matchMode: $("cfg-match").value };
+  const rule = {
+    pset: App.selectedAttr.pset,
+    attribute: App.selectedAttr.attribute,
+    targetFolderId: folder,
+    matchMode: $("cfg-match").value,
+  };
   try {
     await saveConfig(rule);
     sh.textContent = "Gespeichert.";
@@ -374,22 +435,36 @@ function showConfig() {
     const r = App.config.rules[0];
     $("cfg-folder").value = r.targetFolderId || "";
     $("cfg-match").value = r.matchMode || "exact";
-    const sel2 = $("cfg-attr");
-    const opt = document.createElement("option");
-    opt.value = JSON.stringify({ pset: r.pset, attribute: r.attribute });
-    opt.textContent = r.pset + " › " + r.attribute + " (aktuell)";
-    opt.selected = true;
-    sel2.innerHTML = "";
-    sel2.appendChild(opt);
+    App.selectedAttr = { pset: r.pset, attribute: r.attribute };
+    $("cfg-attr-search").value = r.pset + " › " + r.attribute;
   }
+  // Attribute vorab im Hintergrund laden -> Filtern reagiert danach sofort
+  loadAttributeChoices();
 }
 
 function bindUI() {
   $("btn-lookup").addEventListener("click", lookupSelected);
-  $("btn-load-attrs").addEventListener("click", loadAttributeChoices);
   $("btn-save").addEventListener("click", onSave);
   $("btn-settings").addEventListener("click", showConfig);
   $("btn-back").addEventListener("click", showRuntime);
+
+  const searchEl = $("cfg-attr-search");
+  let t;
+  searchEl.addEventListener("focus", async () => {
+    if (!App.attrChoices.length) await loadAttributeChoices();
+    renderAttrResults(searchEl.value);
+  });
+  searchEl.addEventListener("input", () => {
+    clearTimeout(t);
+    t = setTimeout(() => renderAttrResults(searchEl.value), 100);
+  });
+  searchEl.addEventListener("blur", () => {
+    setTimeout(() => $("cfg-attr-results").classList.add("hidden"), 150);
+  });
+  $("btn-attr-reload").addEventListener("click", async () => {
+    await loadAttributeChoices(true);
+    renderAttrResults(searchEl.value);
+  });
 }
 
 // ---------- Helfer ----------
