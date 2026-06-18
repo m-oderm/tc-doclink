@@ -144,6 +144,16 @@
           <option value="contains">Dateiname enthält Attributwert</option>
         </select>
       </div>
+      <div class="row">
+        <label for="cfg-filetype">4. Dateityp</label>
+        <select id="cfg-filetype">
+          <option value="all">Alle anzeigen</option>
+          <option value="pdf">Nur PDF</option>
+          <option value="abs">Nur ABS</option>
+          <option value="word">Nur Word</option>
+          <option value="excel">Nur Excel</option>
+        </select>
+      </div>
       <button class="primary" id="btn-save">Speichern</button>
       <p class="hint" id="save-hint"></p>
     </div>
@@ -334,8 +344,10 @@ async function showModelLists(force) {
     const seen = new Set();
     const result = [];
     for (const key of keys) {
-      const file = matchInIndex(files, key, rule.matchMode);
-      if (file && !seen.has(file.id)) { seen.add(file.id); result.push({ key, file }); }
+      const matches = matchAllInIndex(files, key, rule.matchMode, rule.fileType);
+      for (const file of matches) {
+        if (!seen.has(file.id)) { seen.add(file.id); result.push({ key, file }); }
+      }
     }
     result.sort((a, b) => String(a.file.name).localeCompare(String(b.file.name)));
     App.modelLists = result;
@@ -381,13 +393,13 @@ async function lookupSelected(sel) {
         + esc(rule.pset) + " › " + esc(rule.attribute) + "</b> an diesem Bauteil.</div>" + backLink());
       return;
     }
-    const file = await findFile(rule.targetFolderId, key, rule.matchMode);
-    if (!file) {
+    const hits = await findFiles(rule.targetFolderId, key, rule.matchMode, rule.fileType);
+    if (!hits.length) {
       out.innerHTML = card('<div class="warn">Keine Liste zu Schlüssel '
         + '<span class="key">' + esc(displayKey(key)) + "</span> gefunden.</div>" + backLink());
       return;
     }
-    showResult(key, file);
+    showResults(key, hits);
   } catch (e) {
     out.innerHTML = card('<div class="warn">Fehler: ' + esc(e.message || String(e)) + "</div>");
   }
@@ -409,14 +421,24 @@ function notConfigured() {
     + '<span class="hint">Oben rechts auf ⚙ tippen, um die Verknüpfung einzurichten.</span></div>';
 }
 
-function showResult(key, file) {
-  $("runtime-out").innerHTML = card(
-      '<div class="badge">Schlüssel <span class="key">' + esc(displayKey(key)) + "</span></div>"
-    + '<div class="result-name" style="margin:8px 0">' + esc(file.name) + "</div>"
-    + '<a href="' + esc(open2DUrl(file.id)) + '" target="_blank" rel="noopener">'
-    + '<button class="primary">Dokument öffnen</button></a>'
-    + backLink()
-  );
+function showResults(key, files) {
+  const sorted = files.slice().sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  let html = '<div class="badge">Schlüssel <span class="key">' + esc(displayKey(key)) + "</span></div>";
+  if (sorted.length === 1) {
+    const f = sorted[0];
+    html += '<div class="result-name" style="margin:8px 0">' + esc(f.name) + "</div>"
+      + '<a href="' + esc(open2DUrl(f.id)) + '" target="_blank" rel="noopener">'
+      + '<button class="primary">Dokument öffnen</button></a>';
+  } else {
+    html += '<p class="hint" style="margin:8px 0 10px">' + sorted.length + " Dateien zu diesem Schlüssel:</p>"
+      + '<div class="filelist">';
+    for (const f of sorted) {
+      html += '<a class="filerow" href="' + esc(open2DUrl(f.id)) + '" target="_blank" rel="noopener">'
+        + esc(f.name) + "</a>";
+    }
+    html += "</div>";
+  }
+  $("runtime-out").innerHTML = card(html + backLink());
 }
 
 // Defensiver Durchlauf durch die ObjectProperties-Struktur
@@ -502,15 +524,30 @@ function addNumVariants(set, v) {
   if (m && m[2].length < 2) set.add(m[1] + m[2].padStart(2, "0") + (m[3] || ""));
 }
 
-function matchInIndex(files, key, matchMode) {
+const FILE_TYPE_EXT = {
+  pdf: ["pdf"],
+  abs: ["abs"],
+  word: ["doc", "docx"],
+  excel: ["xls", "xlsx", "xlsm", "xlsb", "csv"],
+};
+function fileAllowed(name, fileType) {
+  if (!fileType || fileType === "all") return true;
+  const exts = FILE_TYPE_EXT[fileType] || [];
+  const ext = String(name || "").split(".").pop().toLowerCase();
+  return exts.includes(ext);
+}
+
+function matchAllInIndex(files, key, matchMode, fileType) {
   const n = (s) => String(s || "").toLowerCase();
   const stripExt = (s) => String(s || "").replace(/\.[^.]+$/, "");
   const cands = keyCandidates(key).map(n);
+  const pool = files.filter((f) => fileAllowed(f.name, fileType));
   if (matchMode === "contains") {
-    return files.find((f) => cands.some((c) => c && n(f.name).includes(c)));
+    return pool.filter((f) => cands.some((c) => c && n(f.name).includes(c)));
   }
-  return files.find((f) => cands.some((c) => c && n(stripExt(f.name)) === c))
-      || files.find((f) => cands.some((c) => c && n(f.name).includes(c)));
+  const exact = pool.filter((f) => cands.some((c) => c && n(stripExt(f.name)) === c));
+  if (exact.length) return exact;
+  return pool.filter((f) => cands.some((c) => c && n(f.name).includes(c)));
 }
 
 // Schlüssel für die Anzeige bereinigen — nur offensichtliches Float-Rauschen.
@@ -523,15 +560,15 @@ function displayKey(key) {
   return raw;
 }
 
-async function findFile(folderId, key, matchMode) {
+async function findFiles(folderId, key, matchMode, fileType) {
   let files = await ensureFileIndex(folderId);
-  let hit = matchInIndex(files, key, matchMode);
-  if (!hit) {
+  let hits = matchAllInIndex(files, key, matchMode, fileType);
+  if (!hits.length) {
     // evtl. neu hinzugekommene Datei -> Index einmal frisch laden und nochmal suchen
     files = await ensureFileIndex(folderId, true);
-    hit = matchInIndex(files, key, matchMode);
+    hits = matchAllInIndex(files, key, matchMode, fileType);
   }
-  return hit;
+  return hits;
 }
 
 // ---------- Konfig-Ansicht: durchsuchbare Attribut-Auswahl ----------
@@ -617,6 +654,7 @@ async function onSave() {
     targetFolderId: folder,
     targetFolderName: App.selectedFolderName || "",
     matchMode: $("cfg-match").value,
+    fileType: $("cfg-filetype").value,
   };
   try {
     await saveConfig(rule);
@@ -710,6 +748,7 @@ function showConfig() {
     App.selectedFolderName = r.targetFolderName || r.targetFolderId || "";
     $("folder-display").textContent = App.selectedFolderName || "— kein Ordner gewählt —";
     $("cfg-match").value = r.matchMode || "exact";
+    $("cfg-filetype").value = r.fileType || "all";
     App.selectedAttr = { pset: r.pset, attribute: r.attribute };
     $("cfg-attr-search").value = r.pset + " › " + r.attribute;
   }
