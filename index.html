@@ -123,14 +123,14 @@
     <div class="card stack">
       <div class="row">
         <label for="cfg-attr-search">1. Schlüssel-Attribut
-          <button class="linkbtn" id="btn-attr-reload" type="button" style="float:right">↻ aus Auswahl neu laden</button>
+          <button class="linkbtn" id="btn-attr-reload" type="button" style="float:right">↻ neu laden</button>
         </label>
         <div class="combo">
           <input type="text" id="cfg-attr-search" autocomplete="off"
                  placeholder="Name eingeben, z. B. Stahllistennummer" />
           <div id="cfg-attr-results" class="combo-results hidden"></div>
         </div>
-        <p class="hint" id="attr-hint">Bauteil im Modell wählen, dann hier tippen, um zu filtern.</p>
+        <p class="hint" id="attr-hint">Ohne Auswahl: alle Attribute im Modell. Bauteil wählen schränkt auf dessen Attribute ein.</p>
       </div>
       <div class="row">
         <label>2. Ordner mit den Listen</label>
@@ -180,7 +180,8 @@ const App = {
   projectId: null,
   config: null,        // { projectId, rules: [ {pset, attribute, targetFolderId, matchMode} ] }
   view: "runtime",
-  attrChoices: [],     // zwischengespeicherte Attribute des gewählten Bauteils
+  attrChoices: [],     // zwischengespeicherte Attribute (Bauteil oder ganzes Modell)
+  attrLoading: false,  // verhindert parallele Ladevorgänge der Attribut-Auswahl
   selectedAttr: null,  // { pset, attribute }
   fileIndex: null,     // gecachte, flache Dateiliste des Zielordners
   fileIndexFolder: null,
@@ -248,6 +249,11 @@ function onEvent(event, data) {
     clearTimeout(selRefreshTimer);
     selRefreshTimer = setTimeout(() => {
       if (App.view === "runtime" && App.config) refreshRuntime();
+      else if (App.view === "config") {
+        // Bauteil gewählt -> dessen Attribute; nichts gewählt -> ganzes Modell.
+        // (loadAttributeChoices rendert die Liste nur neu, wenn sie offen ist.)
+        loadAttributeChoices(true);
+      }
     }, 120);
   }
 }
@@ -573,33 +579,92 @@ async function findFiles(folderId, key, matchMode, fileType) {
 
 // ---------- Konfig-Ansicht: durchsuchbare Attribut-Auswahl ----------
 // Lädt die Attribute des gewählten Bauteils EINMAL und cached sie.
+let attrLoadSeq = 0;
 async function loadAttributeChoices(force) {
   if (App.attrChoices.length && !force) return;
+  if (App.attrLoading && !force) return;
+  const myId = ++attrLoadSeq; // neueste Anfrage gewinnt (stale-write-Schutz)
+  App.attrLoading = true;
   const hint = $("attr-hint");
-  hint.textContent = "lese Auswahl…";
   try {
     const sel = await App.api.viewer.getSelection();
-    if (!sel || !sel.length || !sel[0].objectRuntimeIds || !sel[0].objectRuntimeIds.length) {
-      hint.textContent = "Kein Bauteil ausgewählt — eines im Modell antippen, dann ↻.";
-      return;
+    const hasSel = sel && sel.length && sel[0].objectRuntimeIds && sel[0].objectRuntimeIds.length;
+    if (hasSel) {
+      hint.textContent = "lese Bauteil…";
+      const choices = await attrsOfSelection(sel);
+      if (myId !== attrLoadSeq) return;
+      App.attrChoices = choices;
+      hint.textContent = App.attrChoices.length + " Attribute des Bauteils — tippen zum Filtern.";
+    } else {
+      hint.textContent = "scanne Modell…";
+      const choices = await attrsOfModel((done, total) => {
+        if (myId === attrLoadSeq) hint.textContent = "scanne Modell… " + done + " / " + total;
+      });
+      if (myId !== attrLoadSeq) return;
+      App.attrChoices = choices;
+      hint.textContent = App.attrChoices.length + " Attribute im Modell — tippen zum Filtern.";
     }
-    const props = await App.api.viewer.getObjectProperties(
-      sel[0].modelId, [sel[0].objectRuntimeIds[0]]);
-    const choices = [];
-    for (const obj of props || []) {
-      for (const set of (obj.properties || obj.propertySets || [])) {
-        for (const p of (set.properties || [])) {
-          choices.push({ pset: set.name, attr: p.name, value: p.value });
-        }
-      }
-    }
-    App.attrChoices = choices;
-    hint.textContent = choices.length + " Attribute geladen — tippen zum Filtern.";
     const box = $("cfg-attr-results");
     if (box && !box.classList.contains("hidden")) renderAttrResults($("cfg-attr-search").value);
   } catch (e) {
-    hint.textContent = "Fehler: " + (e.message || e);
+    if (myId === attrLoadSeq) hint.textContent = "Fehler: " + (e.message || e);
+  } finally {
+    if (myId === attrLoadSeq) App.attrLoading = false;
   }
+}
+
+// Attribute des aktuell gewählten Bauteils.
+async function attrsOfSelection(sel) {
+  const props = await App.api.viewer.getObjectProperties(
+    sel[0].modelId, [sel[0].objectRuntimeIds[0]]);
+  const choices = [];
+  for (const obj of props || []) {
+    for (const set of (obj.properties || obj.propertySets || [])) {
+      for (const p of (set.properties || [])) {
+        choices.push({ pset: set.name, attr: p.name, value: p.value });
+      }
+    }
+  }
+  return choices;
+}
+
+// Alle distinkten Attribute im Modell (Pset + Name) mit Beispielwert.
+// Früh-Stop, sobald keine neuen Attribute mehr auftauchen (Namen wiederholen sich stark).
+const ATTR_SCAN_CAP = 2500;
+async function attrsOfModel(onProgress) {
+  const modelObjs = await App.api.viewer.getObjects();
+  const map = new Map(); // "pset\u0000attr" -> {pset, attr, value}
+  const add = (pset, attr, value) => {
+    const k = pset + "\u0000" + attr;
+    if (!map.has(k)) map.set(k, { pset, attr, value });
+  };
+  const collect = (p) => {
+    for (const set of (p.properties || p.propertySets || [])) {
+      for (const pr of (set.properties || [])) add(set.name, pr.name, pr.value);
+    }
+  };
+  let total = 0;
+  for (const mo of (modelObjs || [])) total += (mo.objects || []).length;
+  let scanned = 0;
+  for (const mo of (modelObjs || [])) {
+    const objs = mo.objects || [];
+    const need = [];
+    for (const o of objs) {
+      if (o && o.properties) { collect(o); scanned++; }
+      else if (o) need.push(o.id);
+    }
+    for (let i = 0; i < need.length && scanned < ATTR_SCAN_CAP; i += SCAN_CHUNK) {
+      const chunk = need.slice(i, i + SCAN_CHUNK);
+      const before = map.size;
+      const props = await App.api.viewer.getObjectProperties(mo.modelId, chunk);
+      for (const p of (props || [])) collect(p);
+      scanned += chunk.length;
+      if (onProgress) onProgress(Math.min(scanned, total), total);
+      if (map.size === before && scanned >= 500) break; // keine neuen Attribute mehr
+    }
+    if (scanned >= ATTR_SCAN_CAP) break;
+  }
+  return [...map.values()].sort((a, b) => (a.pset + a.attr).localeCompare(b.pset + b.attr));
 }
 
 // Filtert die gecachten Attribute live und zeigt sie nach Pset gruppiert.
@@ -607,7 +672,7 @@ function renderAttrResults(filter) {
   const box = $("cfg-attr-results");
   const f = String(filter || "").toLowerCase().trim();
   if (!App.attrChoices.length) {
-    box.innerHTML = '<div class="combo-empty">Kein Bauteil geladen. Bauteil im Modell wählen, dann ↻.</div>';
+    box.innerHTML = '<div class="combo-empty">Keine Attribute gefunden. ↻ neu laden oder ein Bauteil im Modell wählen.</div>';
     box.classList.remove("hidden");
     return;
   }
@@ -770,7 +835,7 @@ function bindUI() {
   const searchEl = $("cfg-attr-search");
   let t;
   searchEl.addEventListener("focus", async () => {
-    if (!App.attrChoices.length) await loadAttributeChoices();
+    if (!App.attrChoices.length && !App.attrLoading) await loadAttributeChoices();
     renderAttrResults(searchEl.value);
   });
   searchEl.addEventListener("input", () => {
