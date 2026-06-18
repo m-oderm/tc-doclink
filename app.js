@@ -15,6 +15,7 @@ const App = {
   selectedFolderId: null,
   selectedFolderName: "",
   modelLists: null,    // gecachtes Ergebnis des Modell-Scans: [{key, file}]
+  fileObjects: null,   // fileId -> [{modelId, runtimeId}] für „Im Modell wählen"
   attrDecimals: null,  // aus der Mehrheit der Werte abgeleitete Nachkommastellen
 };
 
@@ -160,6 +161,13 @@ async function showModelLists(force) {
     for (const mo of (modelObjs || [])) total += (mo.objects || []).length;
 
     const keys = new Set();
+    const keyObjs = new Map(); // Wert -> [{ modelId, runtimeId }] (für Modell-Auswahl)
+    const noteObj = (v, modelId, runtimeId) => {
+      keys.add(v);
+      if (runtimeId == null) return;
+      if (!keyObjs.has(v)) keyObjs.set(v, []);
+      keyObjs.get(v).push({ modelId, runtimeId });
+    };
     let scanned = 0;
     for (const mo of (modelObjs || [])) {
       const objs = mo.objects || [];
@@ -167,7 +175,7 @@ async function showModelLists(force) {
       for (const o of objs) {
         if (o && o.properties) {                 // Properties evtl. schon dabei
           const v = extractValue([o], rule.pset, rule.attribute);
-          if (v) keys.add(v);
+          if (v) noteObj(v, mo.modelId, o.id);
           scanned++;
         } else if (o) {
           need.push(o.id);
@@ -178,7 +186,7 @@ async function showModelLists(force) {
         const props = await App.api.viewer.getObjectProperties(mo.modelId, chunk);
         for (const p of (props || [])) {
           const v = extractValue([p], rule.pset, rule.attribute);
-          if (v) keys.add(v);
+          if (v) noteObj(v, mo.modelId, p.id);
         }
         scanned += chunk.length;
         out.innerHTML = card('<span class="spinner"></span> &nbsp;Scanne Modell… ' + scanned + " / " + total);
@@ -191,12 +199,18 @@ async function showModelLists(force) {
     // im Modell vorkommende Werte -> passende Dateien (nach Datei dedupliziert)
     const seen = new Set();
     const result = [];
+    const fileObjects = new Map(); // fileId -> [{ modelId, runtimeId }]
     for (const key of keys) {
       const matches = matchAllInIndex(files, key, rule.matchMode, rule.fileType);
+      const objs = keyObjs.get(key) || [];
       for (const file of matches) {
+        if (!fileObjects.has(file.id)) fileObjects.set(file.id, []);
+        const arr = fileObjects.get(file.id);
+        for (const o of objs) arr.push(o);
         if (!seen.has(file.id)) { seen.add(file.id); result.push({ key, file }); }
       }
     }
+    App.fileObjects = fileObjects;
     result.sort((a, b) => String(a.file.name).localeCompare(String(b.file.name)));
     App.modelLists = result;
     renderModelLists(result);
@@ -213,11 +227,18 @@ function renderModelLists(result) {
     return;
   }
   let html = '<div class="badge">' + result.length + " Listen im Modell</div>"
-    + '<p class="hint" style="margin:8px 0 12px">Bauteil im Modell wählen, um auf dessen Liste zu filtern.</p>'
-    + '<div class="filelist">';
+    + '<p class="hint" style="margin:8px 0 12px">Liste öffnen oder im Modell die zugehörigen Bauteile anwählen.</p>'
+    + '<div class="listrows">';
   for (const r of result) {
-    html += '<a class="filerow" href="' + esc(open2DUrl(r.file.id)) + '" target="_blank" rel="noopener">'
-      + esc(r.file.name) + "</a>";
+    const objs = (App.fileObjects && App.fileObjects.get(r.file.id)) || [];
+    html += '<div class="listrow">'
+      + '<div class="listrow-name">' + esc(r.file.name) + "</div>"
+      + '<div class="listrow-actions">'
+      + '<a class="rowbtn" href="' + esc(open2DUrl(r.file.id)) + '" target="_blank" rel="noopener">Öffnen</a>'
+      + '<button class="rowbtn js-select" type="button" data-fileid="' + esc(r.file.id) + '"'
+      + (objs.length ? "" : " disabled")
+      + ">Im Modell wählen" + (objs.length ? " (" + objs.length + ")" : "") + "</button>"
+      + "</div></div>";
   }
   html += "</div>";
   out.innerHTML = card(html);
@@ -251,6 +272,25 @@ async function lookupSelected(sel) {
   } catch (e) {
     out.innerHTML = card('<div class="warn">Fehler: ' + esc(e.message || String(e)) + "</div>");
   }
+}
+
+// Wählt im 3D-Modell alle Bauteile an, die zu dieser Liste gehören (gleiche Nummer),
+// und zoomt darauf. Nutzt die gemerkten Bauteil-IDs aus dem Modell-Scan.
+async function selectObjectsForFile(fileId) {
+  const objs = (App.fileObjects && App.fileObjects.get(fileId)) || [];
+  if (!objs.length) return;
+  const byModel = new Map();
+  for (const o of objs) {
+    if (!byModel.has(o.modelId)) byModel.set(o.modelId, []);
+    byModel.get(o.modelId).push(o.runtimeId);
+  }
+  const selector = {
+    modelObjectIds: [...byModel.entries()].map(([modelId, ids]) => ({ modelId, objectRuntimeIds: ids })),
+  };
+  try {
+    await App.api.viewer.setSelection(selector, "set");
+    try { await App.api.viewer.setCamera(selector, { animationTime: 500 }); } catch (_) {}
+  } catch (_) { /* Auswahl im Viewer nicht möglich -> still ignorieren */ }
 }
 
 function open2DUrl(fileId) {
@@ -569,6 +609,7 @@ async function onSave() {
     sh.textContent = "Gespeichert.";
     sh.className = "hint ok";
     App.modelLists = null; // Regel geändert -> Modell-Scan neu
+    App.fileObjects = null;
     // Index für den (ggf. neuen) Ordner im Hintergrund aufbauen
     ensureFileIndex(folder, true).catch(() => {});
   } catch (e) {
@@ -689,6 +730,8 @@ function bindUI() {
 
   // Klick auf „← Alle Listen" (per Delegation, da Inhalt dynamisch ist)
   $("runtime-out").addEventListener("click", (e) => {
+    const sel = e.target.closest(".js-select");
+    if (sel) { selectObjectsForFile(sel.getAttribute("data-fileid")); return; }
     if (e.target.closest(".js-all")) showModelLists();
   });
 
