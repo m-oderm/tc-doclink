@@ -1,10 +1,21 @@
-# Basis-Sicherheits-Header für alle Routen (funktionsneutral).
-# HINWEIS: Content-Security-Policy und frame-ancestors sind bewusst NICHT hier,
-# da sie gegen die echte Trimble-Einbettung live getestet werden müssen
-# (sonst lädt die Erweiterung im iFrame evtl. nicht mehr / Inline-Script wird blockiert).
+# Basis-Sicherheits-Header für alle Routen.
+#
+# Die Content-Security-Policy (CSP) steht zunächst im REPORT-ONLY-Modus: Der Browser
+# BLOCKIERT nichts, sondern meldet Verstösse nur in der DevTools-Konsole. So lässt sich
+# gefahrlos prüfen, ob im echten Trimble-Viewer etwas anschlagen würde.
+#
+# Scharfschalten (nach erfolgreichem Live-Test):
+#   1. Erweiterung in Trimble Connect öffnen, DevTools-Konsole beobachten.
+#   2. Keine relevanten CSP-Verstösse? Header umbenennen:
+#      "Content-Security-Policy-Report-Only"  ->  "Content-Security-Policy"
+#   3. Bricht danach die Einbettung, zeigt der Konsolen-Report die echte
+#      Einbettungs-Domain ("frame-ancestors") — diese exakt in die Liste eintragen.
+#   4. Meldet die Konsole "script-src"/"connect-src"-Verstösse durch das Trimble-Script,
+#      den betroffenen Host dort ergänzen (ggf. 'unsafe-eval' bei script-src).
 /*
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
+  Content-Security-Policy-Report-Only: default-src 'self'; script-src 'self' https://components.connect.trimble.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors https://*.connect.trimble.com https://*.trimble.com
 
 # Trimble Connect lädt das Manifest cross-origin -> CORS erlauben
 /manifest.json
@@ -17,6 +28,10 @@
   Cache-Control: no-store
 
 /
+  Cache-Control: no-store
+
+# app.js ebenfalls nicht cachen -> Code-Updates sofort wirksam
+/app.js
   Cache-Control: no-store
 
 /icon.svg
