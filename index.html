@@ -94,13 +94,14 @@
   .filerow:first-child { border-top: 0; }
   .filerow:hover { text-decoration: underline; }
   .listrows { display: flex; flex-direction: column; }
-  .listrow { padding: 11px 2px; border-top: 1px solid var(--line); }
+  .listrow { display: flex; align-items: center; gap: 8px; padding: 6px 2px; border-top: 1px solid var(--line); }
   .listrow:first-child { border-top: 0; }
-  .listrow-name { word-break: break-word; margin-bottom: 8px; font-size: 14px; }
-  .listrow-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-  .rowbtn { display: inline-block; padding: 7px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--field); color: var(--fg); font-size: 13px; text-decoration: none; cursor: pointer; width: auto; min-height: 0; }
-  .rowbtn:hover { border-color: var(--accent); }
-  .rowbtn:disabled { opacity: .5; cursor: default; }
+  .listrow-name { flex: 1; min-width: 0; color: var(--accent); text-decoration: none; font-size: 13px; line-height: 1.3; word-break: break-word; }
+  .listrow-name:hover { text-decoration: underline; }
+  .selbtn { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 5px; padding: 5px 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--field); color: var(--fg); font-size: 12px; cursor: pointer; width: auto; min-height: 0; white-space: nowrap; }
+  .selbtn:hover { border-color: var(--accent); }
+  .selbtn:disabled { opacity: .45; cursor: default; }
+  .selbtn svg { width: 13px; height: 13px; flex: 0 0 auto; }
   .doc h2 { font-size: 15px; font-weight: 650; margin: 18px 0 6px; }
   .doc h2:first-child { margin-top: 0; }
   .doc p { margin: 0 0 10px; line-height: 1.55; }

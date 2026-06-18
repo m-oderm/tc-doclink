@@ -227,18 +227,18 @@ function renderModelLists(result) {
     return;
   }
   let html = '<div class="badge">' + result.length + " Listen im Modell</div>"
-    + '<p class="hint" style="margin:8px 0 12px">Liste öffnen oder im Modell die zugehörigen Bauteile anwählen.</p>'
+    + '<p class="hint" style="margin:8px 0 10px">Name antippen öffnet die Liste · Button wählt die Bauteile im Modell.</p>'
     + '<div class="listrows">';
   for (const r of result) {
     const objs = (App.fileObjects && App.fileObjects.get(r.file.id)) || [];
     html += '<div class="listrow">'
-      + '<div class="listrow-name">' + esc(r.file.name) + "</div>"
-      + '<div class="listrow-actions">'
-      + '<a class="rowbtn" href="' + esc(open2DUrl(r.file.id)) + '" target="_blank" rel="noopener">Öffnen</a>'
-      + '<button class="rowbtn js-select" type="button" data-fileid="' + esc(r.file.id) + '"'
+      + '<a class="listrow-name" href="' + esc(open2DUrl(r.file.id)) + '" target="_blank" rel="noopener" title="Liste öffnen">'
+      + esc(r.file.name) + "</a>"
+      + '<button class="selbtn js-select" type="button" data-fileid="' + esc(r.file.id) + '"'
       + (objs.length ? "" : " disabled")
-      + ">Im Modell wählen" + (objs.length ? " (" + objs.length + ")" : "") + "</button>"
-      + "</div></div>";
+      + ' title="Zugehörige Bauteile im Modell anwählen">' + SEL_ICON
+      + "<span>" + (objs.length || 0) + "</span></button>"
+      + "</div>";
   }
   html += "</div>";
   out.innerHTML = card(html);
@@ -622,6 +622,10 @@ async function onSave() {
 let fbStack = []; // [{id, name}], letztes Element = aktueller Ordner
 const FOLDER_ICON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
   + 'stroke-width="2" style="vertical-align:-3px;opacity:.6;flex:0 0 auto"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
+
+const SEL_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+  + 'stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/>'
+  + '<path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>';
 
 async function fbFetch(qs) {
   const r = await fetch("/api/browse?" + qs, { headers: { Authorization: "Bearer " + (App.token || "") } });
