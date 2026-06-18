@@ -4,5 +4,12 @@
   Access-Control-Allow-Methods: GET, OPTIONS
   Cache-Control: no-store
 
+# index.html nicht cachen, damit Code-Updates sofort im Viewer ankommen
+/index.html
+  Cache-Control: no-store
+
+/
+  Cache-Control: no-store
+
 /icon.svg
   Access-Control-Allow-Origin: *
