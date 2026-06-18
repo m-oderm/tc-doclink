@@ -80,6 +80,15 @@
   .combo-item .val { color: var(--muted); font-size: 12px; }
   .combo-empty { padding: 14px 12px; color: var(--muted); font-size: 13px; }
   .linkbtn { background: none; border: 0; color: var(--accent); padding: 0; min-height: 0; font-size: 13px; font-weight: 600; cursor: pointer; }
+  .picked { padding: 11px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--field); font-size: 14px; word-break: break-word; }
+  .browser { position: fixed; inset: 0; background: var(--bg); z-index: 50; display: flex; flex-direction: column; padding: 16px; }
+  .browser-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .fb-crumb { flex: 1; font-size: 13px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .fb-list { flex: 1; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; margin-bottom: 12px; }
+  .fb-folder { display: flex; align-items: center; gap: 8px; padding: 13px 12px; cursor: pointer; border-top: 1px solid var(--line); }
+  .fb-folder:first-child { border-top: 0; }
+  .fb-folder:hover { background: var(--field); }
+  .fb-empty { padding: 14px 12px; color: var(--muted); font-size: 13px; }
 </style>
 </head>
 <body>
@@ -120,9 +129,9 @@
         <p class="hint" id="attr-hint">Bauteil im Modell wählen, dann hier tippen, um zu filtern.</p>
       </div>
       <div class="row">
-        <label for="cfg-folder">2. Ordner-ID mit den Listen</label>
-        <input type="text" id="cfg-folder" placeholder="z. B. aBcD123..." />
-        <p class="hint">Die Ordner-ID findest du in der URL des Datei-Explorers in Trimble (…/folder/<b>ID</b>).</p>
+        <label>2. Ordner mit den Listen</label>
+        <div id="folder-display" class="picked">— kein Ordner gewählt —</div>
+        <button class="ghost" id="btn-pick-folder" type="button" style="margin-top:8px">Ordner wählen…</button>
       </div>
       <div class="row">
         <label for="cfg-match">3. Abgleich</label>
@@ -133,6 +142,17 @@
       </div>
       <button class="primary" id="btn-save">Speichern</button>
       <p class="hint" id="save-hint"></p>
+    </div>
+
+    <!-- ORDNER-BROWSER (Overlay) -->
+    <div id="folder-browser" class="browser hidden">
+      <div class="browser-head">
+        <button class="linkbtn" id="fb-up" type="button">↑ zurück</button>
+        <span id="fb-crumb" class="fb-crumb"></span>
+        <button class="iconbtn" id="fb-close" type="button" style="width:36px;min-height:36px;font-size:16px">✕</button>
+      </div>
+      <div id="fb-list" class="fb-list"></div>
+      <button class="primary" id="fb-choose" type="button">Diesen Ordner wählen</button>
     </div>
   </section>
 </div>
@@ -151,6 +171,8 @@ const App = {
   fileIndex: null,     // gecachte, flache Dateiliste des Zielordners
   fileIndexFolder: null,
   _indexPromise: null,
+  selectedFolderId: null,
+  selectedFolderName: "",
 };
 
 const $ = (id) => document.getElementById(id);
@@ -427,13 +449,14 @@ function renderAttrResults(filter) {
 
 async function onSave() {
   const sh = $("save-hint");
-  const folder = $("cfg-folder").value.trim();
+  const folder = App.selectedFolderId;
   if (!App.selectedAttr) { sh.textContent = "Bitte ein Attribut wählen."; sh.className = "hint warn"; return; }
-  if (!folder) { sh.textContent = "Bitte eine Ordner-ID eintragen."; sh.className = "hint warn"; return; }
+  if (!folder) { sh.textContent = "Bitte einen Ordner wählen."; sh.className = "hint warn"; return; }
   const rule = {
     pset: App.selectedAttr.pset,
     attribute: App.selectedAttr.attribute,
     targetFolderId: folder,
+    targetFolderName: App.selectedFolderName || "",
     matchMode: $("cfg-match").value,
   };
   try {
@@ -446,6 +469,67 @@ async function onSave() {
     sh.textContent = e.message;
     sh.className = "hint warn";
   }
+}
+
+// ---------- Ordner-Browser ----------
+let fbStack = []; // [{id, name}], letztes Element = aktueller Ordner
+const FOLDER_ICON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+  + 'stroke-width="2" style="vertical-align:-3px;opacity:.6;flex:0 0 auto"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
+
+async function fbFetch(qs) {
+  const r = await fetch("/api/browse?" + qs, { headers: { Authorization: "Bearer " + (App.token || "") } });
+  if (!r.ok) throw new Error("(" + r.status + ")");
+  return r.json();
+}
+
+async function openFolderBrowser() {
+  $("folder-browser").classList.remove("hidden");
+  $("fb-list").innerHTML = '<div class="fb-empty">lädt…</div>';
+  try {
+    const data = await fbFetch("projectId=" + encodeURIComponent(App.projectId));
+    fbStack = [{ id: data.folderId, name: "Projekt" }];
+    renderFb(data.folders);
+  } catch (e) {
+    $("fb-list").innerHTML = '<div class="fb-empty warn">Ordner nicht lesbar ' + esc(e.message || e) + "</div>";
+  }
+}
+
+async function fbReload() {
+  $("fb-list").innerHTML = '<div class="fb-empty">lädt…</div>';
+  try {
+    const data = await fbFetch("folderId=" + encodeURIComponent(fbStack[fbStack.length - 1].id));
+    renderFb(data.folders);
+  } catch (e) {
+    $("fb-list").innerHTML = '<div class="fb-empty warn">Fehler ' + esc(e.message || e) + "</div>";
+  }
+}
+
+function renderFb(folders) {
+  $("fb-crumb").textContent = fbStack.map((s) => s.name).join(" / ");
+  const list = $("fb-list");
+  folders = folders || [];
+  if (!folders.length) {
+    list.innerHTML = '<div class="fb-empty">Keine Unterordner. Mit „Diesen Ordner wählen" bestätigen.</div>';
+    return;
+  }
+  list.innerHTML = "";
+  folders.forEach((f) => {
+    const el = document.createElement("div");
+    el.className = "fb-folder";
+    el.innerHTML = FOLDER_ICON + " <span>" + esc(f.name) + "</span>";
+    el.addEventListener("click", () => { fbStack.push({ id: f.id, name: f.name }); fbReload(); });
+    list.appendChild(el);
+  });
+}
+
+function fbUp() { if (fbStack.length > 1) { fbStack.pop(); fbReload(); } }
+function fbClose() { $("folder-browser").classList.add("hidden"); }
+function fbChoose() {
+  const cur = fbStack[fbStack.length - 1];
+  App.selectedFolderId = cur.id;
+  App.selectedFolderName = fbStack.map((s) => s.name).join(" / ");
+  $("folder-display").textContent = App.selectedFolderName;
+  fbClose();
 }
 
 // ---------- Ansicht wechseln ----------
@@ -468,7 +552,9 @@ function showConfig() {
   $("view-runtime").classList.add("hidden");
   if (App.config && App.config.rules[0]) {
     const r = App.config.rules[0];
-    $("cfg-folder").value = r.targetFolderId || "";
+    App.selectedFolderId = r.targetFolderId || null;
+    App.selectedFolderName = r.targetFolderName || r.targetFolderId || "";
+    $("folder-display").textContent = App.selectedFolderName || "— kein Ordner gewählt —";
     $("cfg-match").value = r.matchMode || "exact";
     App.selectedAttr = { pset: r.pset, attribute: r.attribute };
     $("cfg-attr-search").value = r.pset + " › " + r.attribute;
@@ -500,6 +586,11 @@ function bindUI() {
     await loadAttributeChoices(true);
     renderAttrResults(searchEl.value);
   });
+
+  $("btn-pick-folder").addEventListener("click", openFolderBrowser);
+  $("fb-up").addEventListener("click", fbUp);
+  $("fb-close").addEventListener("click", fbClose);
+  $("fb-choose").addEventListener("click", fbChoose);
 }
 
 // ---------- Helfer ----------
