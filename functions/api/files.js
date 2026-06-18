@@ -48,10 +48,13 @@ export async function onRequest(context) {
         });
       }
     }
+    // Unterordner DERSELBEN Ebene parallel abfragen (schneller als sequenziell)
+    const tasks = [];
     for (const sub of subfolders) {
       if (calls >= MAX_CALLS) break;
-      await listFolder(sub, depth + 1);
+      tasks.push(listFolder(sub, depth + 1));
     }
+    await Promise.all(tasks);
   }
 
   try {

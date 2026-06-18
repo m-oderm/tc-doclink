@@ -148,6 +148,9 @@ const App = {
   view: "runtime",
   attrChoices: [],     // zwischengespeicherte Attribute des gewählten Bauteils
   selectedAttr: null,  // { pset, attribute }
+  fileIndex: null,     // gecachte, flache Dateiliste des Zielordners
+  fileIndexFolder: null,
+  _indexPromise: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -184,6 +187,11 @@ const $ = (id) => document.getElementById(id);
   await loadConfig();
   bindUI();
   showRuntime();
+
+  // Datei-Index im Hintergrund vorladen -> erster Abruf ist schnell
+  if (App.config && App.config.rules[0]) {
+    ensureFileIndex(App.config.rules[0].targetFolderId).catch(() => {});
+  }
 })();
 
 // ---------- Events von Trimble ----------
@@ -303,21 +311,46 @@ function extractValue(propsArray, psetName, attrName) {
   return "";
 }
 
-async function findFile(folderId, key, matchMode) {
-  const r = await fetch("/api/files?folderId=" + encodeURIComponent(folderId), {
-    headers: { Authorization: "Bearer " + (App.token || "") },
-  });
-  if (!r.ok) throw new Error("Ordner nicht lesbar (" + r.status + ")");
-  const items = await r.json();
-  const files = (items || []).filter((i) => i.type !== "FOLDER");
+// Lädt die (rekursive) Dateiliste des Ordners EINMAL und cached sie.
+async function ensureFileIndex(folderId, force) {
+  if (force || App.fileIndexFolder !== folderId) {
+    App.fileIndex = null;
+    App.fileIndexFolder = folderId;
+    App._indexPromise = null;
+  }
+  if (App.fileIndex) return App.fileIndex;
+  if (!App._indexPromise) {
+    App._indexPromise = (async () => {
+      const r = await fetch("/api/files?folderId=" + encodeURIComponent(folderId), {
+        headers: { Authorization: "Bearer " + (App.token || "") },
+      });
+      if (!r.ok) throw new Error("Ordner nicht lesbar (" + r.status + ")");
+      const items = await r.json();
+      App.fileIndex = (items || []).filter((i) => i.type !== "FOLDER");
+      return App.fileIndex;
+    })();
+  }
+  try { return await App._indexPromise; }
+  finally { App._indexPromise = null; }
+}
+
+function matchInIndex(files, key, matchMode) {
   const n = (s) => String(s || "").toLowerCase();
   const stripExt = (s) => String(s || "").replace(/\.[^.]+$/, "");
-
-  if (matchMode === "contains") {
-    return files.find((f) => n(f.name).includes(n(key)));
-  }
+  if (matchMode === "contains") return files.find((f) => n(f.name).includes(n(key)));
   return files.find((f) => n(stripExt(f.name)) === n(key))
       || files.find((f) => n(f.name).includes(n(key)));
+}
+
+async function findFile(folderId, key, matchMode) {
+  let files = await ensureFileIndex(folderId);
+  let hit = matchInIndex(files, key, matchMode);
+  if (!hit) {
+    // evtl. neu hinzugekommene Datei -> Index einmal frisch laden und nochmal suchen
+    files = await ensureFileIndex(folderId, true);
+    hit = matchInIndex(files, key, matchMode);
+  }
+  return hit;
 }
 
 // ---------- Konfig-Ansicht: durchsuchbare Attribut-Auswahl ----------
@@ -407,6 +440,8 @@ async function onSave() {
     await saveConfig(rule);
     sh.textContent = "Gespeichert.";
     sh.className = "hint ok";
+    // Index für den (ggf. neuen) Ordner im Hintergrund aufbauen
+    ensureFileIndex(folder, true).catch(() => {});
   } catch (e) {
     sh.textContent = e.message;
     sh.className = "hint warn";
