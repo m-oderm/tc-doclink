@@ -177,6 +177,7 @@ const App = {
   _indexPromise: null,
   selectedFolderId: null,
   selectedFolderName: "",
+  modelLists: null,    // gecachtes Ergebnis des Modell-Scans: [{key, file}]
 };
 
 const $ = (id) => document.getElementById(id);
@@ -271,39 +272,91 @@ async function saveConfig(rule) {
 }
 
 // ---------- Laufzeit ----------
-// Entscheidet: Auswahl vorhanden -> filtern; nichts gewählt -> alle Listen.
-async function refreshRuntime() {
+// Entscheidet: Auswahl vorhanden -> filtern; nichts gewählt -> Modell-Listen.
+async function refreshRuntime(force) {
   if (!App.config) { $("runtime-out").innerHTML = card(notConfigured()); return; }
   let sel = null;
   try { sel = await App.api.viewer.getSelection(); } catch (_) {}
   if (sel && sel.length && sel[0].objectRuntimeIds && sel[0].objectRuntimeIds.length) {
     lookupSelected(sel);
   } else {
-    showAllLists();
+    showModelLists(force === true);
   }
 }
 
-// Alle Listen des konfigurierten Ordners (Übersicht, wenn nichts gewählt ist)
-async function showAllLists() {
+// Übersicht: nur die Listen, deren Schlüssel im GELADENEN MODELL vorkommen
+// (wie die Datentabelle: Attributwerte im Modell sammeln, dann abgleichen).
+const SCAN_CHUNK = 500;
+async function showModelLists(force) {
   const out = $("runtime-out");
   if (!App.config) { out.innerHTML = card(notConfigured()); return; }
-  out.innerHTML = card('<span class="spinner"></span> &nbsp;Lade Listen…');
+  if (!force && App.modelLists) { renderModelLists(App.modelLists); return; }
+
+  const rule = App.config.rules[0];
+  out.innerHTML = card('<span class="spinner"></span> &nbsp;Scanne Modell…');
   try {
-    const files = await ensureFileIndex(App.config.rules[0].targetFolderId);
-    if (!files.length) { out.innerHTML = card('<div class="empty">Keine Listen im Ordner.</div>'); return; }
-    const sorted = files.slice().sort((a, b) => String(a.name).localeCompare(String(b.name)));
-    let html = '<div class="badge">' + sorted.length + " Listen</div>"
-      + '<p class="hint" style="margin:8px 0 12px">Bauteil im Modell wählen, um auf dessen Liste zu filtern.</p>'
-      + '<div class="filelist">';
-    for (const f of sorted) {
-      html += '<a class="filerow" href="' + esc(open2DUrl(f.id)) + '" target="_blank" rel="noopener">'
-        + esc(f.name) + "</a>";
+    const files = await ensureFileIndex(rule.targetFolderId);
+    const modelObjs = await App.api.viewer.getObjects();
+    let total = 0;
+    for (const mo of (modelObjs || [])) total += (mo.objects || []).length;
+
+    const keys = new Set();
+    let scanned = 0;
+    for (const mo of (modelObjs || [])) {
+      const objs = mo.objects || [];
+      const need = [];
+      for (const o of objs) {
+        if (o && o.properties) {                 // Properties evtl. schon dabei
+          const v = extractValue([o], rule.pset, rule.attribute);
+          if (v) keys.add(v);
+          scanned++;
+        } else if (o) {
+          need.push(o.id);
+        }
+      }
+      for (let i = 0; i < need.length; i += SCAN_CHUNK) {
+        const chunk = need.slice(i, i + SCAN_CHUNK);
+        const props = await App.api.viewer.getObjectProperties(mo.modelId, chunk);
+        for (const p of (props || [])) {
+          const v = extractValue([p], rule.pset, rule.attribute);
+          if (v) keys.add(v);
+        }
+        scanned += chunk.length;
+        out.innerHTML = card('<span class="spinner"></span> &nbsp;Scanne Modell… ' + scanned + " / " + total);
+      }
     }
-    html += "</div>";
-    out.innerHTML = card(html);
+
+    // im Modell vorkommende Werte -> passende Dateien (nach Datei dedupliziert)
+    const seen = new Set();
+    const result = [];
+    for (const key of keys) {
+      const file = matchInIndex(files, key, rule.matchMode);
+      if (file && !seen.has(file.id)) { seen.add(file.id); result.push({ key, file }); }
+    }
+    result.sort((a, b) => String(a.file.name).localeCompare(String(b.file.name)));
+    App.modelLists = result;
+    renderModelLists(result);
   } catch (e) {
-    out.innerHTML = card('<div class="warn">Listen nicht ladbar: ' + esc(e.message || e) + "</div>");
+    out.innerHTML = card('<div class="warn">Modell-Scan fehlgeschlagen: ' + esc(e.message || e) + "</div>");
   }
+}
+
+function renderModelLists(result) {
+  const out = $("runtime-out");
+  if (!result.length) {
+    out.innerHTML = card('<div class="empty">Keine passenden Listen im geladenen Modell.<br>'
+      + '<span class="hint">Stimmen Attribut und Ordner in den Einstellungen?</span></div>');
+    return;
+  }
+  let html = '<div class="badge">' + result.length + " Listen im Modell</div>"
+    + '<p class="hint" style="margin:8px 0 12px">Bauteil im Modell wählen, um auf dessen Liste zu filtern.</p>'
+    + '<div class="filelist">';
+  for (const r of result) {
+    html += '<a class="filerow" href="' + esc(open2DUrl(r.file.id)) + '" target="_blank" rel="noopener">'
+      + esc(r.file.name) + "</a>";
+  }
+  html += "</div>";
+  out.innerHTML = card(html);
 }
 
 // Genau eine Liste zum gewählten Bauteil
@@ -313,7 +366,7 @@ async function lookupSelected(sel) {
   try {
     if (!sel) sel = await App.api.viewer.getSelection();
     if (!sel || !sel.length || !sel[0].objectRuntimeIds || !sel[0].objectRuntimeIds.length) {
-      return showAllLists();
+      return showModelLists();
     }
     const rule = App.config.rules[0];
     const props = await App.api.viewer.getObjectProperties(sel[0].modelId, [sel[0].objectRuntimeIds[0]]);
@@ -509,6 +562,7 @@ async function onSave() {
     await saveConfig(rule);
     sh.textContent = "Gespeichert.";
     sh.className = "hint ok";
+    App.modelLists = null; // Regel geändert -> Modell-Scan neu
     // Index für den (ggf. neuen) Ordner im Hintergrund aufbauen
     ensureFileIndex(folder, true).catch(() => {});
   } catch (e) {
@@ -604,14 +658,14 @@ function showConfig() {
 }
 
 function bindUI() {
-  $("btn-lookup").addEventListener("click", refreshRuntime);
+  $("btn-lookup").addEventListener("click", () => refreshRuntime(true));
   $("btn-save").addEventListener("click", onSave);
   $("btn-settings").addEventListener("click", showConfig);
   $("btn-back").addEventListener("click", showRuntime);
 
   // Klick auf „← Alle Listen" (per Delegation, da Inhalt dynamisch ist)
   $("runtime-out").addEventListener("click", (e) => {
-    if (e.target.closest(".js-all")) showAllLists();
+    if (e.target.closest(".js-all")) showModelLists();
   });
 
   const searchEl = $("cfg-attr-search");
