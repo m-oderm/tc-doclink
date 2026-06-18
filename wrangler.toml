@@ -7,7 +7,7 @@ pages_build_output_dir = "."
 # (oder im Pages-Dashboard unter Settings -> Functions -> KV namespace bindings binden).
 [[kv_namespaces]]
 binding = "CONFIG_KV"
-id = "DEINE_KV_NAMESPACE_ID"
+id = "dfcf09b29c4449f2a87d256644688c5e"
 
 [vars]
 # ⚠️ Region-Host EURES Projekts. NA-Master als Platzhalter – für CH/EU ersetzen!
