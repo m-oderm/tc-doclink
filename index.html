@@ -89,6 +89,10 @@
   .fb-folder:first-child { border-top: 0; }
   .fb-folder:hover { background: var(--field); }
   .fb-empty { padding: 14px 12px; color: var(--muted); font-size: 13px; }
+  .filelist { display: flex; flex-direction: column; }
+  .filerow { display: block; padding: 11px 2px; border-top: 1px solid var(--line); color: var(--accent); text-decoration: none; word-break: break-word; }
+  .filerow:first-child { border-top: 0; }
+  .filerow:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
@@ -105,9 +109,9 @@
   <!-- LAUFZEIT-ANSICHT -->
   <section id="view-runtime">
     <div class="card">
-      <button class="primary" id="btn-lookup">Liste zum gewählten Bauteil anzeigen</button>
+      <button class="primary" id="btn-lookup">Aktualisieren</button>
       <p class="hint" style="margin:10px 0 0">
-        Bauteil im 3D-Modell antippen, dann tippen — oder automatisch bei jeder Auswahl.
+        Nichts gewählt zeigt alle Listen. Bauteil im Modell wählen filtert auf dessen Liste.
       </p>
     </div>
     <div id="runtime-out"></div>
@@ -217,6 +221,7 @@ const $ = (id) => document.getElementById(id);
 })();
 
 // ---------- Events von Trimble ----------
+let selRefreshTimer = null;
 function onEvent(event, data) {
   if (event === "extension.command") {
     const cmd = data && data.data;
@@ -226,9 +231,12 @@ function onEvent(event, data) {
     const t = data && data.data;
     if (t && t !== "pending" && t !== "denied") App.token = t;
   } else if (/selection/i.test(event)) {
-    // Auto-Trigger bei Auswahlwechsel. Exakter Event-Name variiert je nach
-    // Viewer-Version -> bewusst lose gematcht; der Button funktioniert unabhängig.
-    if (App.view === "runtime" && App.config) lookupSelected();
+    // Auswahlwechsel: gewählt -> filtern, nichts gewählt -> alle Listen.
+    // Exakter Event-Name variiert je nach Viewer-Version -> lose gematcht + entprellt.
+    clearTimeout(selRefreshTimer);
+    selRefreshTimer = setTimeout(() => {
+      if (App.view === "runtime" && App.config) refreshRuntime();
+    }, 120);
   }
 }
 
@@ -262,39 +270,64 @@ async function saveConfig(rule) {
   App.config = payload;
 }
 
-// ---------- Laufzeit: Bauteil -> Dokument ----------
-async function lookupSelected() {
-  const out = $("runtime-out");
-  if (!App.config) {
-    out.innerHTML = card('<div class="empty">Noch nicht konfiguriert.<br>'
-      + '<span class="hint">Oben rechts auf ⚙ tippen, um die Verknüpfung einzurichten.</span></div>');
-    return;
+// ---------- Laufzeit ----------
+// Entscheidet: Auswahl vorhanden -> filtern; nichts gewählt -> alle Listen.
+async function refreshRuntime() {
+  if (!App.config) { $("runtime-out").innerHTML = card(notConfigured()); return; }
+  let sel = null;
+  try { sel = await App.api.viewer.getSelection(); } catch (_) {}
+  if (sel && sel.length && sel[0].objectRuntimeIds && sel[0].objectRuntimeIds.length) {
+    lookupSelected(sel);
+  } else {
+    showAllLists();
   }
-  out.innerHTML = card('<span class="spinner"></span> &nbsp;Suche Dokument…');
+}
 
+// Alle Listen des konfigurierten Ordners (Übersicht, wenn nichts gewählt ist)
+async function showAllLists() {
+  const out = $("runtime-out");
+  if (!App.config) { out.innerHTML = card(notConfigured()); return; }
+  out.innerHTML = card('<span class="spinner"></span> &nbsp;Lade Listen…');
   try {
-    const sel = await App.api.viewer.getSelection();
+    const files = await ensureFileIndex(App.config.rules[0].targetFolderId);
+    if (!files.length) { out.innerHTML = card('<div class="empty">Keine Listen im Ordner.</div>'); return; }
+    const sorted = files.slice().sort((a, b) => String(a.name).localeCompare(String(b.name)));
+    let html = '<div class="badge">' + sorted.length + " Listen</div>"
+      + '<p class="hint" style="margin:8px 0 12px">Bauteil im Modell wählen, um auf dessen Liste zu filtern.</p>'
+      + '<div class="filelist">';
+    for (const f of sorted) {
+      html += '<a class="filerow" href="' + esc(open2DUrl(f.id)) + '" target="_blank" rel="noopener">'
+        + esc(f.name) + "</a>";
+    }
+    html += "</div>";
+    out.innerHTML = card(html);
+  } catch (e) {
+    out.innerHTML = card('<div class="warn">Listen nicht ladbar: ' + esc(e.message || e) + "</div>");
+  }
+}
+
+// Genau eine Liste zum gewählten Bauteil
+async function lookupSelected(sel) {
+  const out = $("runtime-out");
+  out.innerHTML = card('<span class="spinner"></span> &nbsp;Suche Liste…');
+  try {
+    if (!sel) sel = await App.api.viewer.getSelection();
     if (!sel || !sel.length || !sel[0].objectRuntimeIds || !sel[0].objectRuntimeIds.length) {
-      out.innerHTML = card('<div class="empty">Kein Bauteil ausgewählt.</div>');
-      return;
+      return showAllLists();
     }
     const rule = App.config.rules[0];
-    const modelId = sel[0].modelId;
-    const runtimeId = sel[0].objectRuntimeIds[0];
-
-    const props = await App.api.viewer.getObjectProperties(modelId, [runtimeId]);
+    const props = await App.api.viewer.getObjectProperties(sel[0].modelId, [sel[0].objectRuntimeIds[0]]);
     const key = extractValue(props, rule.pset, rule.attribute);
 
     if (!key) {
       out.innerHTML = card('<div class="warn">Kein Schlüssel im Attribut <b>'
-        + esc(rule.pset) + " › " + esc(rule.attribute) + "</b> an diesem Bauteil.</div>");
+        + esc(rule.pset) + " › " + esc(rule.attribute) + "</b> an diesem Bauteil.</div>" + backLink());
       return;
     }
-
     const file = await findFile(rule.targetFolderId, key, rule.matchMode);
     if (!file) {
       out.innerHTML = card('<div class="warn">Keine Liste zu Schlüssel '
-        + '<span class="key">' + esc(key) + "</span> gefunden.</div>");
+        + '<span class="key">' + esc(key) + "</span> gefunden.</div>" + backLink());
       return;
     }
     showResult(key, file);
@@ -303,16 +336,29 @@ async function lookupSelected() {
   }
 }
 
-function showResult(key, file) {
+function open2DUrl(fileId) {
   // 2D-Viewer-Link (PDF/Zeichnungen). Der data/files-Pfad öffnet nur ein leeres Fenster.
-  const fid = encodeURIComponent(file.id);
-  const openUrl = "https://web.connect.trimble.com/projects/" + App.projectId
+  const fid = encodeURIComponent(fileId);
+  return "https://web.connect.trimble.com/projects/" + App.projectId
     + "/viewer/2D?id=" + fid + "&version=" + fid + "&type=revisions&etag=" + fid;
+}
+
+function backLink() {
+  return '<button class="ghost js-all" type="button" style="width:100%;margin-top:12px">← Alle Listen</button>';
+}
+
+function notConfigured() {
+  return '<div class="empty">Noch nicht konfiguriert.<br>'
+    + '<span class="hint">Oben rechts auf ⚙ tippen, um die Verknüpfung einzurichten.</span></div>';
+}
+
+function showResult(key, file) {
   $("runtime-out").innerHTML = card(
       '<div class="badge">Schlüssel <span class="key">' + esc(key) + "</span></div>"
     + '<div class="result-name" style="margin:8px 0">' + esc(file.name) + "</div>"
-    + '<a href="' + esc(openUrl) + '" target="_blank" rel="noopener">'
+    + '<a href="' + esc(open2DUrl(file.id)) + '" target="_blank" rel="noopener">'
     + '<button class="primary">Dokument öffnen</button></a>'
+    + backLink()
   );
 }
 
@@ -537,13 +583,7 @@ function showRuntime() {
   App.view = "runtime";
   $("view-runtime").classList.remove("hidden");
   $("view-config").classList.add("hidden");
-  const out = $("runtime-out");
-  if (!App.config) {
-    out.innerHTML = card('<div class="empty">Noch nicht konfiguriert.<br>'
-      + '<span class="hint">Oben rechts auf ⚙ tippen, um die Verknüpfung einzurichten.</span></div>');
-  } else {
-    out.innerHTML = "";
-  }
+  refreshRuntime();
 }
 
 function showConfig() {
@@ -564,10 +604,15 @@ function showConfig() {
 }
 
 function bindUI() {
-  $("btn-lookup").addEventListener("click", lookupSelected);
+  $("btn-lookup").addEventListener("click", refreshRuntime);
   $("btn-save").addEventListener("click", onSave);
   $("btn-settings").addEventListener("click", showConfig);
   $("btn-back").addEventListener("click", showRuntime);
+
+  // Klick auf „← Alle Listen" (per Delegation, da Inhalt dynamisch ist)
+  $("runtime-out").addEventListener("click", (e) => {
+    if (e.target.closest(".js-all")) showAllLists();
+  });
 
   const searchEl = $("cfg-attr-search");
   let t;
