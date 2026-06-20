@@ -212,30 +212,49 @@
       <h2>Was macht diese Erweiterung?</h2>
       <p>Der Dokumenten-Verknüpfer verbindet Bauteile im 3D-Modell mit den zugehörigen
          Listen (z. B. Eisen-/Stahllisten) im Projektordner. Du wählst ein Bauteil an und
-         bekommst direkt die passende Liste zum Öffnen — ohne im Datei-Explorer zu suchen.</p>
+         bekommst direkt die passende Liste zum Öffnen. So musst du nicht im Datei-Explorer
+         suchen.</p>
 
       <h2>Einrichtung (einmalig, über ⚙)</h2>
       <ol>
         <li><strong>Schlüssel-Attribut:</strong> das Bauteil-Attribut, das die Liste
-            identifiziert (z. B. <code>Listennummer</code>). Ohne Auswahl werden alle
-            Attribute des Modells angeboten; wählst du ein Bauteil, nur dessen Attribute.</li>
+            identifiziert, zum Beispiel <code>Listennummer</code>. Ohne Auswahl werden alle
+            Attribute des Modells angeboten. Wählst du ein Bauteil, nur dessen Attribute.</li>
         <li><strong>Ordner mit den Listen:</strong> über „Ordner wählen…" den Projektordner
             mit den Dateien festlegen.</li>
         <li><strong>Abgleich:</strong> „Dateiname = Attributwert" (exakt) oder „Dateiname
-            enthält Attributwert" (für Namen wie <code>…_437.01_EL_Bewehrung.pdf</code>).</li>
-        <li><strong>Dateityp:</strong> Filter auf z. B. nur PDF, damit nicht-öffenbare
-            Dateien (etwa <code>.abs</code>) ausgeblendet werden.</li>
+            enthält Attributwert".</li>
+        <li><strong>Dateityp:</strong> Filter, zum Beispiel nur PDF. So werden nicht
+            öffenbare Dateien wie <code>.abs</code> ausgeblendet.</li>
+        <li><strong>Archiv-/Alt-Ordner:</strong> am besten „überspringen". Dann werden
+            Ordner wie alt, archiv oder backup beim Suchen ausgelassen. So erscheinen keine
+            veralteten Listen.</li>
       </ol>
-      <p>Mit „Speichern" wird die Konfiguration pro Projekt gesichert.</p>
+      <p>Zum Schluss speicherst du die Einstellungen:</p>
+      <ul>
+        <li><strong>Für mich speichern:</strong> speichert die Einstellungen nur für dich.</li>
+        <li><strong>Als Projekt-Standard speichern:</strong> nur für Projekt-Admins sichtbar.
+            Setzt die Vorgabe für alle im Projekt.</li>
+        <li><strong>Herkunft der Einstellungen:</strong> oben steht, ob du die Projekt-Vorgabe
+            nutzt oder deine eigenen Einstellungen. Hast du eigene, kannst du mit „Auf
+            Projekt-Standard zurücksetzen" wieder zur Vorgabe wechseln.</li>
+      </ul>
+      <p>Hinweis: Meist richtet das DBA-Team den Projekt-Standard ein. Dann musst du nichts tun.</p>
 
       <h2>Tägliche Nutzung</h2>
       <ul>
         <li><strong>Nichts gewählt:</strong> die Übersicht zeigt alle im Modell
             vorkommenden Listen.</li>
         <li><strong>Bauteil angeklickt:</strong> es wird nur dessen Liste angezeigt.</li>
+        <li><strong>Suchfeld:</strong> oben eine Nummer oder einen Namen eintippen, um
+            schnell zu filtern.</li>
+        <li><strong>Änderungsdatum:</strong> unter jedem Namen steht das Datum der letzten
+            Änderung. So erkennst du die aktuelle Version.</li>
+        <li><strong>Im Modell wählen:</strong> der Knopf mit dem Ziel-Symbol wählt die
+            zugehörigen Bauteile im Modell an und zoomt darauf.</li>
         <li><strong>Dokument öffnen:</strong> öffnet die Datei im 2D-Viewer von Trimble Connect.</li>
-        <li><strong>Aktualisieren:</strong> erzwingt einen frischen Modell- und Ordner-Scan
-            (z. B. nach neuen Dateien).</li>
+        <li><strong>Aktualisieren:</strong> erzwingt einen frischen Modell- und Ordner-Scan,
+            zum Beispiel nach neuen Dateien.</li>
       </ul>
 
       <h2>Wenn etwas nicht passt</h2>
@@ -273,7 +292,8 @@
       <h2>Daten &amp; Hosting</h2>
       <p>Die Erweiterung liest Modell-Attribute und den Inhalt des gewählten Projektordners.
          Gespeichert wird ausschliesslich die Konfiguration je Projekt (Attribut, Ordner,
-         Abgleichart, Dateityp-Filter). Es werden keine Modell- oder Dateiinhalte abgelegt.</p>
+         Abgleichart, Dateityp-Filter). Es gibt eine Projekt-Vorgabe für alle und persönliche
+         Überschreibungen je Benutzer. Es werden keine Modell- oder Dateiinhalte abgelegt.</p>
       <ul>
         <li>Die Oberfläche der Erweiterung wird über <strong>Cloudflare Pages</strong>
             bereitgestellt; die projektbezogene Konfiguration liegt im <strong>Cloudflare
