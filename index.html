@@ -113,10 +113,20 @@
   .doc code { background: var(--field); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
   .doc .muted { color: var(--muted); font-size: 13px; }
   .foot-links { display: flex; gap: 18px; margin-top: 16px; }
+  .updbar { display: flex; align-items: center; gap: 10px; background: var(--accent); color: var(--accent-fg); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; font-size: 14px; }
+  .updbar-text { flex: 1; }
+  .updbar-reload { background: var(--accent-fg); color: var(--accent); border: 0; border-radius: 6px; padding: 8px 12px; min-height: 0; font-weight: 600; cursor: pointer; }
+  .updbar-close { background: transparent; border: 0; color: var(--accent-fg); font-size: 16px; min-height: 0; padding: 0 4px; cursor: pointer; opacity: .85; }
+  .updbar-close:hover { opacity: 1; }
 </style>
 </head>
 <body>
 <div class="wrap">
+  <div id="update-bar" class="updbar hidden">
+    <span class="updbar-text">Neue Version verfügbar.</span>
+    <button class="updbar-reload" id="update-reload" type="button">Neu laden</button>
+    <button class="updbar-close" id="update-close" type="button" aria-label="Schliessen" title="Schliessen">✕</button>
+  </div>
   <header>
     <img src="icon.svg" width="22" height="22" alt="" />
     <div style="flex:1">
@@ -290,7 +300,7 @@
     <button class="ghost" id="btn-about-back" style="margin-bottom:12px">← Zurück</button>
     <div class="card doc">
       <h2>Dokumenten-Verknüpfer</h2>
-      <p class="muted">Version <span id="about-version">–</span></p>
+      <p class="muted">Version <span id="about-version">–</span><span id="about-built"></span></p>
       <p>Eine Trimble-Connect-Erweiterung, die Bauteile im 3D-Modell mit ihren zugehörigen
          Dokumenten und Listen im Projektordner verknüpft — entwickelt für den Einsatz auf
          der Baustelle (Polier, Bauführer).</p>

@@ -36,6 +36,14 @@ ihnen nötig. CORS braucht nur das Manifest (Trimble lädt es cross-origin).
    ```
    (oder Git-Repo im Pages-Dashboard verbinden – Build Output Directory: `.`)
 
+   **Build command für die Versionsanzeige:** Im Pages-Dashboard unter Settings,
+   Build and deployments, das Build command auf `bash build.sh` setzen. Output-
+   Verzeichnis bleibt `.`. `build.sh` schreibt dann bei jedem Deploy `version.json`
+   mit dem Commit-Hash (`CF_PAGES_COMMIT_SHA`). Daraus liest das Frontend die Version
+   und zeigt bei einem neuen Deploy oben eine Leiste „Neue Version verfügbar". Ohne
+   gesetztes Build command fehlt `version.json` einfach, die App läuft normal weiter.
+   Das Setzen ist ein manueller Schritt im Dashboard.
+
 4. **Manifest-URL anpassen** – in `manifest.json` `url` und `icon` auf eure
    Pages-Domain setzen (`https://<name>.pages.dev/...`).
 

@@ -7,6 +7,8 @@ const App = {
   config: null,        // wirksame Konfig (effective): { projectId, rules: [ {pset, attribute, targetFolderId, matchMode} ] }
   hasOverride: false,  // true, wenn eine persoenliche Ueberschreibung gespeichert ist
   isAdmin: false,      // true, wenn der Benutzer Projekt-Admin ist (Projekt-Standard speicherbar)
+  version: null,       // Inhalt von version.json: { version, builtAt }
+  loadedVersion: null, // Versionsnummer beim Laden der Seite (Basis fuer den Update-Vergleich)
   view: "runtime",
   attrChoices: [],     // zwischengespeicherte Attribute (Bauteil oder ganzes Modell)
   attrLoading: false,  // verhindert parallele Ladevorgänge der Attribut-Auswahl
@@ -53,14 +55,63 @@ const $ = (id) => document.getElementById(id);
 
   await ensureToken();
   await loadConfig();
+  await loadVersion();
   bindUI();
   showRuntime();
+  startUpdateChecks();
 
   // Datei-Index im Hintergrund vorladen -> erster Abruf ist schnell
   if (App.config && App.config.rules[0]) {
     ensureFileIndex(App.config.rules[0].targetFolderId).catch(() => {});
   }
 })();
+
+// ---------- Versionsanzeige und Update-Hinweis ----------
+// Laedt version.json einmal beim Start. Fehler werden still ignoriert.
+async function loadVersion() {
+  try {
+    const r = await fetch("/version.json", { cache: "no-store" });
+    if (!r.ok) return;
+    App.version = await r.json();
+    App.loadedVersion = App.version && App.version.version;
+  } catch (_) {}
+}
+
+// Prueft, ob eine neue Version deployt wurde. Zeigt nur bei echten, verschiedenen
+// Werten einen Hinweis (nie bei "dev").
+async function checkForUpdate() {
+  try {
+    const r = await fetch("/version.json", { cache: "no-store" });
+    if (!r.ok) return;
+    const j = await r.json();
+    const cur = j && j.version;
+    if (!cur || cur === "dev") return;
+    if (!App.loadedVersion || App.loadedVersion === "dev") return;
+    if (cur !== App.loadedVersion) showUpdateBar();
+  } catch (_) {}
+}
+
+let updTimer = null;
+function startUpdateChecks() {
+  if (updTimer) return;
+  updTimer = setInterval(checkForUpdate, 5 * 60 * 1000); // alle 5 Minuten
+  document.addEventListener("visibilitychange", onVisibleCheck);
+}
+function stopUpdateChecks() {
+  if (updTimer) { clearInterval(updTimer); updTimer = null; }
+  document.removeEventListener("visibilitychange", onVisibleCheck);
+}
+function onVisibleCheck() {
+  if (document.visibilityState === "visible") checkForUpdate();
+}
+
+// Hinweis-Leiste zeigen und die Pruefung stoppen (die neue Version ist bereits bekannt).
+function showUpdateBar() {
+  const bar = $("update-bar");
+  if (!bar || !bar.classList.contains("hidden")) return;
+  bar.classList.remove("hidden");
+  stopUpdateChecks();
+}
 
 // ---------- Events von Trimble ----------
 let selRefreshTimer = null;
@@ -789,7 +840,10 @@ function showRuntime() {
 
 function showHelp() { setView("help"); }
 function showAbout() {
-  $("about-version").textContent = APP_VERSION;
+  const v = (App.version && App.version.version) ? App.version.version : APP_VERSION;
+  $("about-version").textContent = v;
+  const built = (App.version && App.version.builtAt) ? fmtDate(App.version.builtAt) : "";
+  $("about-built").textContent = built ? " (Stand " + built + ")" : "";
   $("about-year").textContent = new Date().getFullYear();
   setView("about");
 }
@@ -817,6 +871,8 @@ function showConfig() {
 }
 
 function bindUI() {
+  $("update-reload").addEventListener("click", () => location.reload());
+  $("update-close").addEventListener("click", () => $("update-bar").classList.add("hidden"));
   $("btn-lookup").addEventListener("click", () => refreshRuntime(true));
   $("btn-save-user").addEventListener("click", () => onSaveScope("user"));
   $("btn-save-project").addEventListener("click", () => onSaveScope("project"));

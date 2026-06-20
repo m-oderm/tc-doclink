@@ -6,6 +6,9 @@ node_modules/
 .dev.vars
 dist/
 
+# Beim Build erzeugt (build.sh), nicht versionieren
+version.json
+
 # Secrets / lokale Umgebung
 .env
 .env.*

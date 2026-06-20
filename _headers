@@ -34,5 +34,9 @@
 /app.js
   Cache-Control: no-store
 
+# version.json nie cachen, damit die Update-Pruefung immer frisch ist
+/version.json
+  Cache-Control: no-store
+
 /icon.svg
   Access-Control-Allow-Origin: *
