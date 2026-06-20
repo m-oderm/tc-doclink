@@ -4,7 +4,9 @@ const App = {
   api: null,
   token: null,
   projectId: null,
-  config: null,        // { projectId, rules: [ {pset, attribute, targetFolderId, matchMode} ] }
+  config: null,        // wirksame Konfig (effective): { projectId, rules: [ {pset, attribute, targetFolderId, matchMode} ] }
+  hasOverride: false,  // true, wenn eine persoenliche Ueberschreibung gespeichert ist
+  isAdmin: false,      // true, wenn der Benutzer Projekt-Admin ist (Projekt-Standard speicherbar)
   view: "runtime",
   attrChoices: [],     // zwischengespeicherte Attribute (Bauteil oder ganzes Modell)
   attrLoading: false,  // verhindert parallele Ladevorgänge der Attribut-Auswahl
@@ -113,22 +115,39 @@ async function loadConfig() {
     const r = await fetch("/api/config/" + encodeURIComponent(App.projectId), {
       headers: { Authorization: "Bearer " + (App.token || "") },
     });
-    if (r.ok) {
-      const j = await r.json();
-      App.config = (j && j.rules && j.rules.length) ? j : null;
-    }
+    if (r.ok) applyConfigResponse(await r.json());
   } catch (_) {}
 }
 
-async function saveConfig(rule) {
+// Antwort von GET/PUT/DELETE uebernehmen: wirksame Konfig, Override-Status, Admin-Status.
+function applyConfigResponse(j) {
+  const eff = j && j.effective;
+  App.config = (eff && eff.rules && eff.rules.length) ? eff : null;
+  App.hasOverride = !!(j && j.override);
+  App.isAdmin = !!(j && j.isAdmin);
+}
+
+// scope = "user" (persoenlich) oder "project" (Projekt-Standard, nur Admin).
+async function saveConfig(rule, scope) {
   const payload = { projectId: App.projectId, rules: [rule] };
-  const r = await fetch("/api/config/" + encodeURIComponent(App.projectId), {
+  const qs = scope === "project" ? "?scope=project" : "?scope=user";
+  const r = await fetch("/api/config/" + encodeURIComponent(App.projectId) + qs, {
     method: "PUT",
     headers: { "Content-Type": "application/json", Authorization: "Bearer " + (App.token || "") },
     body: JSON.stringify(payload),
   });
   if (!r.ok) throw new Error("Speichern fehlgeschlagen (" + r.status + ")");
-  App.config = payload;
+  applyConfigResponse(await r.json());
+}
+
+// Persoenliche Ueberschreibung loeschen und zur Projekt-Vorgabe zurueckkehren.
+async function deleteOverride() {
+  const r = await fetch("/api/config/" + encodeURIComponent(App.projectId) + "?scope=user", {
+    method: "DELETE",
+    headers: { Authorization: "Bearer " + (App.token || "") },
+  });
+  if (!r.ok) throw new Error("Zuruecksetzen fehlgeschlagen (" + r.status + ")");
+  applyConfigResponse(await r.json());
 }
 
 // ---------- Laufzeit ----------
@@ -621,12 +640,13 @@ function renderAttrResults(filter) {
   });
 }
 
-async function onSave() {
+// Liest das Formular aus und baut die Regel. Gibt null zurück, wenn etwas fehlt.
+function buildRuleFromForm() {
   const sh = $("save-hint");
   const folder = App.selectedFolderId;
-  if (!App.selectedAttr) { sh.textContent = "Bitte ein Attribut wählen."; sh.className = "hint warn"; return; }
-  if (!folder) { sh.textContent = "Bitte einen Ordner wählen."; sh.className = "hint warn"; return; }
-  const rule = {
+  if (!App.selectedAttr) { sh.textContent = "Bitte ein Attribut wählen."; sh.className = "hint warn"; return null; }
+  if (!folder) { sh.textContent = "Bitte einen Ordner wählen."; sh.className = "hint warn"; return null; }
+  return {
     pset: App.selectedAttr.pset,
     attribute: App.selectedAttr.attribute,
     targetFolderId: folder,
@@ -635,17 +655,57 @@ async function onSave() {
     fileType: $("cfg-filetype").value,
     skipArchive: $("cfg-skiparchive").value,
   };
+}
+
+// Cache des Modell-Scans verwerfen, weil sich die wirksame Regel geändert hat.
+function invalidateScan() { App.modelLists = null; App.fileObjects = null; }
+
+async function onSaveScope(scope) {
+  const sh = $("save-hint");
+  const rule = buildRuleFromForm();
+  if (!rule) return;
   try {
-    await saveConfig(rule);
-    sh.textContent = "Gespeichert.";
+    await saveConfig(rule, scope);
+    sh.textContent = scope === "project" ? "Als Projekt-Standard gespeichert." : "Für dich gespeichert.";
     sh.className = "hint ok";
-    App.modelLists = null; // Regel geändert -> Modell-Scan neu
-    App.fileObjects = null;
-    // Index für den (ggf. neuen) Ordner im Hintergrund aufbauen
-    ensureFileIndex(folder, true).catch(() => {});
+    invalidateScan();
+    ensureFileIndex(rule.targetFolderId, true).catch(() => {});
+    renderConfigScopeState();
   } catch (e) {
     sh.textContent = e.message;
     sh.className = "hint warn";
+  }
+}
+
+async function resetToProjectDefault() {
+  const sh = $("save-hint");
+  try {
+    await deleteOverride();
+    sh.textContent = "Auf Projekt-Standard zurückgesetzt.";
+    sh.className = "hint ok";
+    invalidateScan();
+    fillConfigForm();
+    renderConfigScopeState();
+    if (App.config && App.config.rules[0]) ensureFileIndex(App.config.rules[0].targetFolderId, true).catch(() => {});
+  } catch (e) {
+    sh.textContent = e.message;
+    sh.className = "hint warn";
+  }
+}
+
+// Hinweis zur Herkunft der Einstellungen und Sichtbarkeit des Admin-Knopfs setzen.
+function renderConfigScopeState() {
+  const projBtn = $("btn-save-project");
+  if (projBtn) projBtn.classList.toggle("hidden", !App.isAdmin);
+  const note = $("cfg-scope-note");
+  if (!note) return;
+  if (App.hasOverride) {
+    note.innerHTML = "Du nutzt deine eigenen Einstellungen. "
+      + '<button class="linkbtn" id="btn-reset-default" type="button">Auf Projekt-Standard zurücksetzen</button>';
+    const b = $("btn-reset-default");
+    if (b) b.addEventListener("click", resetToProjectDefault);
+  } else {
+    note.textContent = "Du nutzt die Projekt-Vorgabe.";
   }
 }
 
@@ -734,26 +794,32 @@ function showAbout() {
   setView("about");
 }
 
+// Formular aus der wirksamen Konfig (effective) füllen.
+function fillConfigForm() {
+  if (!(App.config && App.config.rules[0])) return;
+  const r = App.config.rules[0];
+  App.selectedFolderId = r.targetFolderId || null;
+  App.selectedFolderName = r.targetFolderName || r.targetFolderId || "";
+  $("folder-display").textContent = App.selectedFolderName || "— kein Ordner gewählt —";
+  $("cfg-match").value = r.matchMode || "exact";
+  $("cfg-filetype").value = r.fileType || "all";
+  $("cfg-skiparchive").value = r.skipArchive || "1";
+  App.selectedAttr = { pset: r.pset, attribute: r.attribute };
+  $("cfg-attr-search").value = r.pset + " › " + r.attribute;
+}
+
 function showConfig() {
   setView("config");
-  if (App.config && App.config.rules[0]) {
-    const r = App.config.rules[0];
-    App.selectedFolderId = r.targetFolderId || null;
-    App.selectedFolderName = r.targetFolderName || r.targetFolderId || "";
-    $("folder-display").textContent = App.selectedFolderName || "— kein Ordner gewählt —";
-    $("cfg-match").value = r.matchMode || "exact";
-    $("cfg-filetype").value = r.fileType || "all";
-    $("cfg-skiparchive").value = r.skipArchive || "1";
-    App.selectedAttr = { pset: r.pset, attribute: r.attribute };
-    $("cfg-attr-search").value = r.pset + " › " + r.attribute;
-  }
+  fillConfigForm();
+  renderConfigScopeState();
   // Attribute vorab im Hintergrund laden -> Filtern reagiert danach sofort
   loadAttributeChoices();
 }
 
 function bindUI() {
   $("btn-lookup").addEventListener("click", () => refreshRuntime(true));
-  $("btn-save").addEventListener("click", onSave);
+  $("btn-save-user").addEventListener("click", () => onSaveScope("user"));
+  $("btn-save-project").addEventListener("click", () => onSaveScope("project"));
   $("btn-settings").addEventListener("click", showConfig);
   $("btn-help").addEventListener("click", showHelp);
   $("btn-back").addEventListener("click", showRuntime);
