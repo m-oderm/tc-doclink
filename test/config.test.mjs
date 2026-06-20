@@ -158,6 +158,35 @@ async function run() {
     ok(res.status === 403, "Nicht-Mitglied: GET -> 403");
   }
 
+  // 11) Admin-Erkennung auch bei gekapselter Liste { members: [...] } und Treffer per userId.
+  {
+    const kv = makeKV();
+    globalThis.fetch = async (url) => {
+      const u = String(url);
+      if (u.includes("/users/me")) return new Response(JSON.stringify({ id: "u1", email: "u1@x.ch" }), { status: 200 });
+      if (u.includes("/users")) return new Response(JSON.stringify({ members: [{ userId: "u1", role: "ADMIN" }] }), { status: 200 });
+      if (u.includes("/projects/p1")) return new Response(JSON.stringify({ id: "p1" }), { status: 200 });
+      return new Response("{}", { status: 404 });
+    };
+    const res = await mod.onRequestGet(ctx({ method: "GET", kv }));
+    const j = await res.json();
+    ok(j.isAdmin === true, "Admin: gekapselte Liste { members: [...] } und Treffer per userId");
+  }
+
+  // 12) Verifizierter users/me-Feldname: id wird als userId-Schluessel genutzt.
+  {
+    const kv = makeKV();
+    globalThis.fetch = async (url) => {
+      const u = String(url);
+      if (u.includes("/users/me")) return new Response(JSON.stringify({ id: "guid-1", tiduuid: "tid-9", email: "a@x.ch" }), { status: 200 });
+      if (u.includes("/users")) return new Response(JSON.stringify([]), { status: 200 });
+      if (u.includes("/projects/p1")) return new Response(JSON.stringify({ id: "p1" }), { status: 200 });
+      return new Response("{}", { status: 404 });
+    };
+    await mod.onRequestPut(ctx({ method: "PUT", scope: "user", body: RULES_B, kv }));
+    ok(kv.store.has("cfg:p1:user:guid-1"), "users/me: id (User-GUID) ist der Schluessel, nicht tiduuid");
+  }
+
   // 10) Reine Helfer: roleIsAdmin und isAdminFromUsers.
   {
     const I = mod._internal;

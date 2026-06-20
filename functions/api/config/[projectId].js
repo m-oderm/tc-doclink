@@ -115,6 +115,12 @@ async function gatherContext(env, request, projectId) {
 
 // Bevorzugt die Core-API (gleicher Id-Raum wie die Projekt-Benutzerliste), faellt auf
 // das JWT zurueck. Liefert { id, email } - id kann null sein.
+//
+// Verifiziert an echten Quellen (offizielle Skill-Doku und produktiver Client-Code):
+//   GET /users/me            -> { id, tiduuid, email, firstName, lastName, status }
+//                               -> die stabile userId ist id (User-GUID).
+//   GET /projects/{id}/users -> Array von { id, email, role, ... }
+//                               -> Admin-Rolle ist role === "ADMIN".
 async function resolveIdentity(base, auth) {
   try {
     const r = await fetch(base + "/users/me", { headers: { Authorization: auth, Accept: "application/json" } });
@@ -148,7 +154,8 @@ async function isProjectAdmin(base, auth, projectId, identity) {
   if (!r.ok) return false;
   let data;
   try { data = await r.json(); } catch (_) { return false; }
-  const list = Array.isArray(data) ? data : (data.items || data.users || data.data || []);
+  // Echte API liefert ein Array; manche Fassungen kapseln es (members/users/items/data).
+  const list = Array.isArray(data) ? data : (data.members || data.users || data.items || data.data || []);
   return isAdminFromUsers(list, identity);
 }
 
