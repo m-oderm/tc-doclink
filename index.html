@@ -77,8 +77,7 @@
   .attr-row:first-child { margin-top: 0; }
   .attr-row .combo { flex: 1; min-width: 0; }
   .attr-op { width: auto; flex: 0 0 auto; padding: 11px 8px; }
-  .attr-remove { width: 40px; min-height: 40px; font-size: 15px; }
-  .addbtn { width: auto; min-height: 0; padding: 7px 12px; font-size: 13px; margin-top: 8px; }
+  .attr-row .iconbtn { width: 40px; min-height: 40px; font-size: 18px; padding: 0; flex: 0 0 auto; }
   .linkbtn { background: none; border: 0; color: var(--accent); padding: 0; min-height: 0; font-size: 13px; font-weight: 600; cursor: pointer; }
   .picked { padding: 11px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--field); font-size: 14px; word-break: break-word; }
   .browser { position: fixed; inset: 0; background: var(--bg); z-index: 50; display: flex; flex-direction: column; padding: 16px; }
@@ -157,7 +156,6 @@
           <button class="linkbtn" id="btn-attr-reload" type="button" style="float:right">↻ neu laden</button>
         </label>
         <div id="cfg-attr-rows"></div>
-        <button class="ghost addbtn" id="btn-add-attr" type="button">+ Attribut</button>
         <p class="hint" id="attr-hint">Ohne Auswahl: alle Attribute im Modell. Bauteil wählen schränkt auf dessen Attribute ein.</p>
         <p class="hint">Mehrere Attribute suchen nach mehreren Werten im Dateinamen. Pro Zeile wählst du „und" oder „oder". Bei mehreren Attributen gilt „enthält".</p>
       </div>
@@ -228,8 +226,10 @@
         <li><strong>Schlüssel-Attribute:</strong> das Bauteil-Attribut, das die Liste
             identifiziert, zum Beispiel <code>Listennummer</code>. Ohne Auswahl werden alle
             Attribute des Modells angeboten. Wählst du ein Bauteil, nur dessen Attribute.
-            Du kannst bis zu drei Attribute kombinieren. Pro Zeile wählst du „und" oder
-            „oder". So suchst du nach mehreren Werten im Dateinamen.</li>
+            Mit dem Knopf <code>+</code> hinter dem Feld fügst du ein weiteres Attribut hinzu,
+            bis zu drei. Pro Zeile wählst du „und" oder „oder". So suchst du nach mehreren
+            Werten im Dateinamen. Ein Attribut entfernst du mit dem Knopf <code>✕</code>.
+            Dasselbe Attribut lässt sich nicht zweimal wählen.</li>
         <li><strong>Ordner mit den Listen:</strong> über „Ordner wählen…" den Projektordner
             mit den Dateien festlegen.</li>
         <li><strong>Abgleich:</strong> „Dateiname = Attributwert" (exakt) oder „Dateiname

@@ -726,15 +726,16 @@ function renderKeyRows() {
       + '<input type="text" class="attr-search" autocomplete="off" placeholder="'
       + (i === 0 ? "Name eingeben, z. B. Stahllistennummer" : "weiteres Attribut") + '" value="' + esc(display) + '" />'
       + '<div class="combo-results hidden"></div></div>';
+    // Genau ein Icon-Knopf am Zeilenende: erste Zeile fuegt hinzu, weitere entfernen.
     if (i > 0) {
       html += '<button class="iconbtn attr-remove" type="button" title="Attribut entfernen" aria-label="Attribut entfernen">✕</button>';
+    } else if (App.keyRows.length < MAX_KEY_ROWS) {
+      html += '<button class="iconbtn attr-add" type="button" title="Attribut hinzufügen" aria-label="Attribut hinzufügen">+</button>';
     }
     html += "</div>";
   });
   wrap.innerHTML = html;
   bindKeyRows();
-  const add = $("btn-add-attr");
-  if (add) add.classList.toggle("hidden", App.keyRows.length >= MAX_KEY_ROWS);
 }
 
 function bindKeyRows() {
@@ -761,6 +762,8 @@ function bindKeyRows() {
     if (op) op.addEventListener("change", () => { if (App.keyRows[idx]) App.keyRows[idx].op = op.value; });
     const rm = rowEl.querySelector(".attr-remove");
     if (rm) rm.addEventListener("click", () => { App.keyRows.splice(idx, 1); renderKeyRows(); });
+    const add = rowEl.querySelector(".attr-add");
+    if (add) add.addEventListener("click", addAttrRow);
   });
 }
 
@@ -1041,7 +1044,6 @@ function bindUI() {
     if (e.target.closest(".js-all")) showModelLists();
   });
 
-  $("btn-add-attr").addEventListener("click", addAttrRow);
   $("btn-attr-reload").addEventListener("click", async () => {
     await loadAttributeChoices(true);
     const wrap = $("cfg-attr-rows");
