@@ -787,8 +787,14 @@ function renderAttrResults(filter, idx) {
     box.classList.remove("hidden");
     return;
   }
+  // Attribute, die andere Zeilen schon nutzen, nicht noch einmal anbieten.
+  const used = new Set();
+  App.keyRows.forEach((r, i) => {
+    if (i !== idx && r && r.attribute) used.add((r.pset || "") + " " + r.attribute);
+  });
   const matches = App.attrChoices.filter((c) =>
-    !f || c.attr.toLowerCase().includes(f) || c.pset.toLowerCase().includes(f));
+    !used.has((c.pset || "") + " " + c.attr)
+    && (!f || c.attr.toLowerCase().includes(f) || c.pset.toLowerCase().includes(f)));
   if (!matches.length) {
     box.innerHTML = '<div class="combo-empty">Keine Treffer.</div>';
     box.classList.remove("hidden");
@@ -824,8 +830,10 @@ function renderAttrResults(filter, idx) {
 function buildRuleFromForm() {
   const sh = $("save-hint");
   const folder = App.selectedFolderId;
+  const seen = new Set();
   const keys = (App.keyRows || [])
     .filter((r) => r && r.attribute)
+    .filter((r) => { const k = (r.pset || "") + " " + r.attribute; if (seen.has(k)) return false; seen.add(k); return true; })
     .map((r, i) => ({ pset: r.pset || "", attribute: r.attribute, op: (i > 0 && r.op === "or") ? "or" : "and" }));
   if (!keys.length) { sh.textContent = "Bitte mindestens ein Attribut wählen."; sh.className = "hint warn"; return null; }
   if (!folder) { sh.textContent = "Bitte einen Ordner wählen."; sh.className = "hint warn"; return null; }
