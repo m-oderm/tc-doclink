@@ -728,7 +728,7 @@ function renderKeyRows() {
       + '<div class="combo-results hidden"></div></div>';
     // Genau ein Icon-Knopf am Zeilenende: erste Zeile fuegt hinzu, weitere entfernen.
     if (i > 0) {
-      html += '<button class="iconbtn attr-remove" type="button" title="Attribut entfernen" aria-label="Attribut entfernen">✕</button>';
+      html += '<button class="iconbtn attr-remove" type="button" title="Attribut entfernen" aria-label="Attribut entfernen">×</button>';
     } else if (App.keyRows.length < MAX_KEY_ROWS) {
       html += '<button class="iconbtn attr-add" type="button" title="Attribut hinzufügen" aria-label="Attribut hinzufügen">+</button>';
     }
