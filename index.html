@@ -78,6 +78,7 @@
   .attr-row .combo { flex: 1; min-width: 0; }
   .attr-op { width: auto; flex: 0 0 auto; padding: 11px 8px; }
   .attr-remove { width: 40px; min-height: 40px; font-size: 15px; }
+  .addbtn { width: auto; min-height: 0; padding: 7px 12px; font-size: 13px; margin-top: 8px; }
   .linkbtn { background: none; border: 0; color: var(--accent); padding: 0; min-height: 0; font-size: 13px; font-weight: 600; cursor: pointer; }
   .picked { padding: 11px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--field); font-size: 14px; word-break: break-word; }
   .browser { position: fixed; inset: 0; background: var(--bg); z-index: 50; display: flex; flex-direction: column; padding: 16px; }
@@ -156,7 +157,7 @@
           <button class="linkbtn" id="btn-attr-reload" type="button" style="float:right">↻ neu laden</button>
         </label>
         <div id="cfg-attr-rows"></div>
-        <button class="ghost" id="btn-add-attr" type="button" style="margin-top:8px">+ Attribut hinzufügen</button>
+        <button class="ghost addbtn" id="btn-add-attr" type="button">+ Attribut</button>
         <p class="hint" id="attr-hint">Ohne Auswahl: alle Attribute im Modell. Bauteil wählen schränkt auf dessen Attribute ein.</p>
         <p class="hint">Mehrere Attribute suchen nach mehreren Werten im Dateinamen. Pro Zeile wählst du „und" oder „oder". Bei mehreren Attributen gilt „enthält".</p>
       </div>
