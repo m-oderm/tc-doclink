@@ -18,12 +18,6 @@
     --field: #f4f6f8;
     --radius: 10px;
   }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #1b1f23; --fg: #e6eaed; --muted: #9aa4ad; --line: #2c333a;
-      --accent: #4a9fe0; --field: #23292f;
-    }
-  }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; }
   body {
@@ -79,6 +73,11 @@
   .combo-item:hover { background: var(--field); }
   .combo-item .val { color: var(--muted); font-size: 12px; }
   .combo-empty { padding: 14px 12px; color: var(--muted); font-size: 13px; }
+  .attr-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+  .attr-row:first-child { margin-top: 0; }
+  .attr-row .combo { flex: 1; min-width: 0; }
+  .attr-op { width: auto; flex: 0 0 auto; padding: 11px 8px; }
+  .attr-remove { width: 40px; min-height: 40px; font-size: 15px; }
   .linkbtn { background: none; border: 0; color: var(--accent); padding: 0; min-height: 0; font-size: 13px; font-weight: 600; cursor: pointer; }
   .picked { padding: 11px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--field); font-size: 14px; word-break: break-word; }
   .browser { position: fixed; inset: 0; background: var(--bg); z-index: 50; display: flex; flex-direction: column; padding: 16px; }
@@ -153,15 +152,13 @@
     <button class="ghost" id="btn-back" style="margin-bottom:12px">← Zurück</button>
     <div class="card stack">
       <div class="row">
-        <label for="cfg-attr-search">1. Schlüssel-Attribut
+        <label>1. Schlüssel-Attribute
           <button class="linkbtn" id="btn-attr-reload" type="button" style="float:right">↻ neu laden</button>
         </label>
-        <div class="combo">
-          <input type="text" id="cfg-attr-search" autocomplete="off"
-                 placeholder="Name eingeben, z. B. Stahllistennummer" />
-          <div id="cfg-attr-results" class="combo-results hidden"></div>
-        </div>
+        <div id="cfg-attr-rows"></div>
+        <button class="ghost" id="btn-add-attr" type="button" style="margin-top:8px">+ Attribut hinzufügen</button>
         <p class="hint" id="attr-hint">Ohne Auswahl: alle Attribute im Modell. Bauteil wählen schränkt auf dessen Attribute ein.</p>
+        <p class="hint">Mehrere Attribute suchen nach mehreren Werten im Dateinamen. Pro Zeile wählst du „und" oder „oder". Bei mehreren Attributen gilt „enthält".</p>
       </div>
       <div class="row">
         <label>2. Ordner mit den Listen</label>
@@ -227,9 +224,11 @@
 
       <h2>Einrichtung (einmalig, über ⚙)</h2>
       <ol>
-        <li><strong>Schlüssel-Attribut:</strong> das Bauteil-Attribut, das die Liste
+        <li><strong>Schlüssel-Attribute:</strong> das Bauteil-Attribut, das die Liste
             identifiziert, zum Beispiel <code>Listennummer</code>. Ohne Auswahl werden alle
-            Attribute des Modells angeboten. Wählst du ein Bauteil, nur dessen Attribute.</li>
+            Attribute des Modells angeboten. Wählst du ein Bauteil, nur dessen Attribute.
+            Du kannst bis zu drei Attribute kombinieren. Pro Zeile wählst du „und" oder
+            „oder". So suchst du nach mehreren Werten im Dateinamen.</li>
         <li><strong>Ordner mit den Listen:</strong> über „Ordner wählen…" den Projektordner
             mit den Dateien festlegen.</li>
         <li><strong>Abgleich:</strong> „Dateiname = Attributwert" (exakt) oder „Dateiname

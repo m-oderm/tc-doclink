@@ -196,6 +196,31 @@ async function run() {
     ok(I.isAdminFromUsers([{ id: "u9", role: "ADMIN" }], { id: "u1" }) === false, "isAdminFromUsers: fremder Admin zaehlt nicht");
   }
 
+  // 13) keys-Normalisierung: Deckel auf 3, op-Whitelist, Spiegelung, Attribut-Pflicht.
+  {
+    const I = mod._internal;
+    ok(I.MAX_KEYS === 3, "MAX_KEYS = 3");
+    const res = I.normalizeConfig({ rules: [{
+      targetFolderId: "f", matchMode: "contains", fileType: "all",
+      keys: [
+        { pset: "P1", attribute: "A1", op: "boese" },
+        { pset: "P2", attribute: "A2", op: "or" },
+        { attribute: "A3" },
+        { pset: "P4", attribute: "A4" },
+      ],
+    }] }, "p1");
+    ok(res.ok, "normalizeConfig mit keys: ok");
+    const r0 = res.value.rules[0];
+    ok(r0.keys.length === 3, "keys auf 3 begrenzt (viertes faellt weg)");
+    ok(r0.keys[0].op === "and", "ungueltiger op wird and");
+    ok(r0.keys[1].op === "or", "op or bleibt erhalten");
+    ok(r0.pset === "P1" && r0.attribute === "A1", "erstes Attribut in pset/attribute gespiegelt");
+
+    const res2 = I.normalizeConfig({ rules: [{ keys: [{ pset: "P" }, { attribute: "A2" }] }] }, "p1");
+    const k2 = res2.value.rules[0].keys;
+    ok(k2.length === 1 && k2[0].attribute === "A2", "key ohne attribute faellt weg");
+  }
+
   console.log("\n" + passed + " ok, " + failed + " fehlgeschlagen");
   if (failed) process.exit(1);
 }

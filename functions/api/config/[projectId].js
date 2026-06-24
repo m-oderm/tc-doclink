@@ -18,8 +18,10 @@
 const ALLOWED_FIELDS = ["pset", "attribute", "targetFolderId", "targetFolderName", "matchMode", "fileType", "skipArchive"];
 const MATCH_MODES = ["exact", "contains"];
 const FILE_TYPES = ["all", "pdf", "abs", "word", "excel"];
+const KEY_OPS = ["and", "or"];
 const MAX_BODY = 16 * 1024; // 16 KB
 const MAX_RULES = 20;
+const MAX_KEYS = 3; // hoechstens drei Schluessel-Attribute pro Regel
 const MAX_FIELD = 512;
 
 export async function onRequestGet(context) {
@@ -224,6 +226,28 @@ function normalizeConfig(parsed, id) {
     if (out.matchMode && !MATCH_MODES.includes(out.matchMode)) return { ok: false, status: 400, message: "ungueltiger matchMode" };
     if (out.fileType && !FILE_TYPES.includes(out.fileType)) return { ok: false, status: 400, message: "ungueltiger fileType" };
     if (out.skipArchive != null) out.skipArchive = (out.skipArchive === "1" || out.skipArchive === "true") ? "1" : "0";
+
+    // Mehrere Schluessel-Attribute: keys[] mit pset, attribute, op (and/or).
+    // Hoechstens MAX_KEYS, leere Eintraege fallen weg, op ausserhalb der Whitelist wird "and".
+    if (Array.isArray(r.keys)) {
+      const keys = [];
+      for (const k of r.keys.slice(0, MAX_KEYS)) {
+        if (!k || typeof k !== "object") continue;
+        const key = {};
+        if (k.pset != null) key.pset = String(k.pset).slice(0, MAX_FIELD);
+        if (k.attribute != null) key.attribute = String(k.attribute).slice(0, MAX_FIELD);
+        if (!key.attribute) continue; // ohne Attribut nutzlos
+        key.op = KEY_OPS.includes(String(k.op || "").toLowerCase()) ? String(k.op).toLowerCase() : "and";
+        keys.push(key);
+      }
+      if (keys.length) {
+        out.keys = keys;
+        // Erstes Attribut auch in die Einzelfelder spiegeln (Abwaertskompatibilitaet).
+        out.pset = keys[0].pset != null ? keys[0].pset : "";
+        out.attribute = keys[0].attribute;
+      }
+    }
+
     clean.rules.push(out);
   }
   return { ok: true, value: clean };
@@ -235,4 +259,4 @@ function err(msg, status) {
 }
 
 // Reine Helfer fuer Inline-Tests (kein Einfluss auf das Routing der Pages Function).
-export const _internal = { normalizeConfig, isAdminFromUsers, roleIsAdmin, decodeJwt, pickId };
+export const _internal = { normalizeConfig, isAdminFromUsers, roleIsAdmin, decodeJwt, pickId, MAX_KEYS };

@@ -12,7 +12,8 @@ const App = {
   view: "runtime",
   attrChoices: [],     // zwischengespeicherte Attribute (Bauteil oder ganzes Modell)
   attrLoading: false,  // verhindert parallele Ladevorgänge der Attribut-Auswahl
-  selectedAttr: null,  // { pset, attribute }
+  keyRows: [],         // Schlüssel-Attribute der Konfig-Ansicht: [{ pset, attribute, op }]
+  activeRow: 0,        // zuletzt fokussierte Attributzeile (für die Trefferliste)
   fileIndex: null,     // gecachte, flache Dateiliste des Zielordners
   fileIndexFolder: null,
   _indexPromise: null,
@@ -223,6 +224,7 @@ async function showModelLists(force) {
   if (!force && App.modelLists) { renderModelLists(App.modelLists); return; }
 
   const rule = App.config.rules[0];
+  const keys = ruleKeys(rule);
   out.innerHTML = card('<span class="spinner"></span> &nbsp;Scanne Modell…');
   try {
     const files = await ensureFileIndex(rule.targetFolderId);
@@ -230,13 +232,14 @@ async function showModelLists(force) {
     let total = 0;
     for (const mo of (modelObjs || [])) total += (mo.objects || []).length;
 
-    const keys = new Set();
-    const keyObjs = new Map(); // Wert -> [{ modelId, runtimeId }] (für Modell-Auswahl)
-    const noteObj = (v, modelId, runtimeId) => {
-      keys.add(v);
-      if (runtimeId == null) return;
-      if (!keyObjs.has(v)) keyObjs.set(v, []);
-      keyObjs.get(v).push({ modelId, runtimeId });
+    // Bauteile nach ihrer Wertkombination buendeln. Gleiche Kombination = gleiche
+    // Dateien, darum nur einmal abgleichen (haelt die Last gering, auch bei 3 Attributen).
+    const tuples = new Map(); // tupleKey -> { vals, objs: [{ modelId, runtimeId }] }
+    const noteObj = (vals, modelId, runtimeId) => {
+      if (!vals.some(Boolean)) return; // kein einziger Wert -> nichts zu suchen
+      const tupleKey = vals.join(" ");
+      if (!tuples.has(tupleKey)) tuples.set(tupleKey, { vals, objs: [] });
+      if (runtimeId != null) tuples.get(tupleKey).objs.push({ modelId, runtimeId });
     };
     let scanned = 0;
     for (const mo of (modelObjs || [])) {
@@ -244,8 +247,7 @@ async function showModelLists(force) {
       const need = [];
       for (const o of objs) {
         if (o && o.properties) {                 // Properties evtl. schon dabei
-          const v = extractValue([o], rule.pset, rule.attribute);
-          if (v) noteObj(v, mo.modelId, o.id);
+          noteObj(extractValues([o], keys), mo.modelId, o.id);
           scanned++;
         } else if (o) {
           need.push(o.id);
@@ -255,29 +257,28 @@ async function showModelLists(force) {
         const chunk = need.slice(i, i + SCAN_CHUNK);
         const props = await App.api.viewer.getObjectProperties(mo.modelId, chunk);
         for (const p of (props || [])) {
-          const v = extractValue([p], rule.pset, rule.attribute);
-          if (v) noteObj(v, mo.modelId, p.id);
+          noteObj(extractValues([p], keys), mo.modelId, p.id);
         }
         scanned += chunk.length;
         out.innerHTML = card('<span class="spinner"></span> &nbsp;Scanne Modell… ' + scanned + " / " + total);
       }
     }
 
-    // Genauigkeit aus der Mehrheit der Modellwerte ableiten (Ausreisser/Float-Rauschen normalisieren)
-    App.attrDecimals = modalDecimals([...keys]);
+    // Genauigkeit aus der Mehrheit der Werte des ersten Attributs ableiten
+    // (Ausreisser/Float-Rauschen normalisieren).
+    App.attrDecimals = modalDecimals([...tuples.values()].map((t) => t.vals[0]).filter(Boolean));
 
-    // im Modell vorkommende Werte -> passende Dateien (nach Datei dedupliziert)
+    // im Modell vorkommende Kombinationen -> passende Dateien (nach Datei dedupliziert)
     const seen = new Set();
     const result = [];
     const fileObjects = new Map(); // fileId -> [{ modelId, runtimeId }]
-    for (const key of keys) {
-      const matches = matchAllInIndex(files, key, rule.matchMode, rule.fileType);
-      const objs = keyObjs.get(key) || [];
+    for (const t of tuples.values()) {
+      const matches = matchFilesForKeys(files, t.vals, keys, rule.matchMode, rule.fileType);
       for (const file of matches) {
         if (!fileObjects.has(file.id)) fileObjects.set(file.id, []);
         const arr = fileObjects.get(file.id);
-        for (const o of objs) arr.push(o);
-        if (!seen.has(file.id)) { seen.add(file.id); result.push({ key, file }); }
+        for (const o of t.objs) arr.push(o);
+        if (!seen.has(file.id)) { seen.add(file.id); result.push({ key: tupleLabel(t.vals), file }); }
       }
     }
     App.fileObjects = fileObjects;
@@ -353,21 +354,24 @@ async function lookupSelected(sel) {
       return showModelLists();
     }
     const rule = App.config.rules[0];
+    const keys = ruleKeys(rule);
     const props = await App.api.viewer.getObjectProperties(sel[0].modelId, [sel[0].objectRuntimeIds[0]]);
-    const key = extractValue(props, rule.pset, rule.attribute);
+    const vals = extractValues(props, keys);
 
-    if (!key) {
+    if (!vals.some(Boolean)) {
+      const names = keys.map((k) => k.pset + " › " + k.attribute).join(", ");
       out.innerHTML = card('<div class="warn">Kein Schlüssel im Attribut <b>'
-        + esc(rule.pset) + " › " + esc(rule.attribute) + "</b> an diesem Bauteil.</div>" + backLink());
+        + esc(names) + "</b> an diesem Bauteil.</div>" + backLink());
       return;
     }
-    const hits = await findFiles(rule.targetFolderId, key, rule.matchMode, rule.fileType);
+    const label = tupleLabel(vals);
+    const hits = await findFilesForKeys(rule.targetFolderId, vals, keys, rule.matchMode, rule.fileType);
     if (!hits.length) {
       out.innerHTML = card('<div class="warn">Keine Liste zu Schlüssel '
-        + '<span class="key">' + esc(displayKey(key)) + "</span> gefunden.</div>" + backLink());
+        + '<span class="key">' + esc(displayKey(label)) + "</span> gefunden.</div>" + backLink());
       return;
     }
-    showResults(key, hits);
+    showResults(label, hits);
   } catch (e) {
     out.innerHTML = card('<div class="warn">Fehler: ' + esc(e.message || String(e)) + "</div>");
   }
@@ -526,17 +530,62 @@ function fileAllowed(name, fileType) {
   return exts.includes(ext);
 }
 
-function matchAllInIndex(files, key, matchMode, fileType) {
-  const n = (s) => String(s || "").toLowerCase();
-  const stripExt = (s) => String(s || "").replace(/\.[^.]+$/, "");
-  const cands = keyCandidates(key).map(n);
-  const pool = files.filter((f) => fileAllowed(f.name, fileType));
-  if (matchMode === "contains") {
-    return pool.filter((f) => cands.some((c) => c && n(f.name).includes(c)));
+const lc = (s) => String(s || "").toLowerCase();
+const stripExt = (s) => String(s || "").replace(/\.[^.]+$/, "");
+
+// Schluessel-Attribute einer Regel als Array. Abwaertskompatibel zur frueheren
+// Einzelangabe (pset/attribute).
+function ruleKeys(rule) {
+  if (rule && Array.isArray(rule.keys) && rule.keys.length) return rule.keys;
+  if (rule && rule.attribute) return [{ pset: rule.pset, attribute: rule.attribute, op: "and" }];
+  return [];
+}
+
+// Werte aller Schluessel-Attribute an einem Bauteil (gleiche Reihenfolge wie keys).
+function extractValues(propsArray, keys) {
+  return keys.map((k) => extractValue(propsArray, k.pset, k.attribute));
+}
+
+// Beschriftung aus den vorhandenen Werten, zum Beispiel "437.01 + Pos5".
+function tupleLabel(vals) {
+  return (vals || []).filter(Boolean).join(" + ");
+}
+
+// Verknuepft die Einzeltreffer mit und/oder, von links nach rechts ausgewertet.
+function combineMatch(vals, keys, test) {
+  if (!vals.length) return false;
+  let res = test(vals[0]);
+  for (let i = 1; i < vals.length; i++) {
+    const m = test(vals[i]);
+    res = (keys[i] && keys[i].op === "or") ? (res || m) : (res && m);
   }
-  const exact = pool.filter((f) => cands.some((c) => c && n(stripExt(f.name)) === c));
+  return res;
+}
+
+// Enthaelt der Dateiname einen der Kandidaten dieses Werts?
+function valueInFile(file, value) {
+  if (!value) return false;
+  const name = lc(file.name);
+  return keyCandidates(value).some((c) => c && name.includes(lc(c)));
+}
+
+// Ein Attribut: bestehendes Verhalten (exakt bevorzugt, sonst enthaelt).
+function matchPoolSingle(pool, key, matchMode) {
+  const cands = keyCandidates(key).map(lc);
+  if (matchMode === "contains") {
+    return pool.filter((f) => cands.some((c) => c && lc(f.name).includes(c)));
+  }
+  const exact = pool.filter((f) => cands.some((c) => c && lc(stripExt(f.name)) === c));
   if (exact.length) return exact;
-  return pool.filter((f) => cands.some((c) => c && n(f.name).includes(c)));
+  return pool.filter((f) => cands.some((c) => c && lc(f.name).includes(c)));
+}
+
+// Dateien, die zu den Werten passen. Ein Attribut wie bisher; mehrere Attribute
+// werden ueber und/oder verknuepft, dabei gilt pro Wert "enthaelt".
+function matchFilesForKeys(files, vals, keys, matchMode, fileType) {
+  const pool = (files || []).filter((f) => fileAllowed(f.name, fileType));
+  if (keys.length <= 1) return matchPoolSingle(pool, vals[0], matchMode);
+  return pool.filter((f) => combineMatch(vals, keys, (v) => valueInFile(f, v)));
 }
 
 // Schlüssel für die Anzeige bereinigen — nur offensichtliches Float-Rauschen.
@@ -549,13 +598,13 @@ function displayKey(key) {
   return raw;
 }
 
-async function findFiles(folderId, key, matchMode, fileType) {
+async function findFilesForKeys(folderId, vals, keys, matchMode, fileType) {
   let files = await ensureFileIndex(folderId);
-  let hits = matchAllInIndex(files, key, matchMode, fileType);
+  let hits = matchFilesForKeys(files, vals, keys, matchMode, fileType);
   if (!hits.length) {
     // evtl. neu hinzugekommene Datei -> Index einmal frisch laden und nochmal suchen
     files = await ensureFileIndex(folderId, true);
-    hits = matchAllInIndex(files, key, matchMode, fileType);
+    hits = matchFilesForKeys(files, vals, keys, matchMode, fileType);
   }
   return hits;
 }
@@ -587,8 +636,13 @@ async function loadAttributeChoices(force) {
       App.attrChoices = choices;
       hint.textContent = App.attrChoices.length + " Attribute im Modell — tippen zum Filtern.";
     }
-    const box = $("cfg-attr-results");
-    if (box && !box.classList.contains("hidden")) renderAttrResults($("cfg-attr-search").value);
+    const wrap = $("cfg-attr-rows");
+    const openBox = wrap && wrap.querySelector(".combo-results:not(.hidden)");
+    if (openBox) {
+      const rowEl = openBox.closest(".attr-row");
+      const rowInput = rowEl.querySelector(".attr-search");
+      renderAttrResults(rowInput.value, Number(rowEl.getAttribute("data-idx")));
+    }
   } catch (e) {
     if (myId === attrLoadSeq) hint.textContent = "Fehler: " + (e.message || e);
   } finally {
@@ -650,9 +704,83 @@ async function attrsOfModel(onProgress) {
   return [...map.values()].sort((a, b) => (a.pset + a.attr).localeCompare(b.pset + b.attr));
 }
 
-// Filtert die gecachten Attribute live und zeigt sie nach Pset gruppiert.
-function renderAttrResults(filter) {
-  const box = $("cfg-attr-results");
+// ---------- Schlüssel-Attribut-Zeilen (eine bis drei) ----------
+const MAX_KEY_ROWS = 3;
+
+// Baut die Attributzeilen aus App.keyRows neu auf und bindet ihre Ereignisse.
+function renderKeyRows() {
+  const wrap = $("cfg-attr-rows");
+  if (!wrap) return;
+  if (!App.keyRows.length) App.keyRows = [{ pset: "", attribute: "", op: "and" }];
+  let html = "";
+  App.keyRows.forEach((row, i) => {
+    const display = row.attribute ? (row.pset ? row.pset + " › " + row.attribute : row.attribute) : "";
+    html += '<div class="attr-row" data-idx="' + i + '">';
+    if (i > 0) {
+      html += '<select class="attr-op" aria-label="Verknüpfung">'
+        + '<option value="and"' + (row.op === "or" ? "" : " selected") + '>und</option>'
+        + '<option value="or"' + (row.op === "or" ? " selected" : "") + '>oder</option>'
+        + "</select>";
+    }
+    html += '<div class="combo">'
+      + '<input type="text" class="attr-search" autocomplete="off" placeholder="'
+      + (i === 0 ? "Name eingeben, z. B. Stahllistennummer" : "weiteres Attribut") + '" value="' + esc(display) + '" />'
+      + '<div class="combo-results hidden"></div></div>';
+    if (i > 0) {
+      html += '<button class="iconbtn attr-remove" type="button" title="Attribut entfernen" aria-label="Attribut entfernen">✕</button>';
+    }
+    html += "</div>";
+  });
+  wrap.innerHTML = html;
+  bindKeyRows();
+  const add = $("btn-add-attr");
+  if (add) add.classList.toggle("hidden", App.keyRows.length >= MAX_KEY_ROWS);
+}
+
+function bindKeyRows() {
+  const wrap = $("cfg-attr-rows");
+  wrap.querySelectorAll(".attr-row").forEach((rowEl) => {
+    const idx = Number(rowEl.getAttribute("data-idx"));
+    const input = rowEl.querySelector(".attr-search");
+    const box = rowEl.querySelector(".combo-results");
+    let t;
+    input.addEventListener("focus", async () => {
+      App.activeRow = idx;
+      if (!App.attrChoices.length && !App.attrLoading) await loadAttributeChoices();
+      renderAttrResults(input.value, idx);
+    });
+    input.addEventListener("input", () => {
+      App.activeRow = idx;
+      clearTimeout(t);
+      t = setTimeout(() => renderAttrResults(input.value, idx), 100);
+    });
+    input.addEventListener("blur", () => {
+      setTimeout(() => box.classList.add("hidden"), 150);
+    });
+    const op = rowEl.querySelector(".attr-op");
+    if (op) op.addEventListener("change", () => { if (App.keyRows[idx]) App.keyRows[idx].op = op.value; });
+    const rm = rowEl.querySelector(".attr-remove");
+    if (rm) rm.addEventListener("click", () => { App.keyRows.splice(idx, 1); renderKeyRows(); });
+  });
+}
+
+function addAttrRow() {
+  if (App.keyRows.length >= MAX_KEY_ROWS) return;
+  App.keyRows.push({ pset: "", attribute: "", op: "and" });
+  renderKeyRows();
+  const inputs = $("cfg-attr-rows").querySelectorAll(".attr-search");
+  const last = inputs[inputs.length - 1];
+  if (last) last.focus();
+}
+
+// Filtert die gecachten Attribute live und zeigt sie unter der Zeile idx, nach Pset gruppiert.
+function renderAttrResults(filter, idx) {
+  if (idx == null) idx = App.activeRow || 0;
+  const wrap = $("cfg-attr-rows");
+  const rowEl = wrap && wrap.querySelector('.attr-row[data-idx="' + idx + '"]');
+  if (!rowEl) return;
+  const box = rowEl.querySelector(".combo-results");
+  const input = rowEl.querySelector(".attr-search");
   const f = String(filter || "").toLowerCase().trim();
   if (!App.attrChoices.length) {
     box.innerHTML = '<div class="combo-empty">Keine Attribute gefunden. ↻ neu laden oder ein Bauteil im Modell wählen.</div>';
@@ -684,8 +812,9 @@ function renderAttrResults(filter) {
   box.querySelectorAll(".combo-item").forEach((el) => {
     el.addEventListener("mousedown", (e) => {
       e.preventDefault(); // vor dem blur des Inputs feuern
-      App.selectedAttr = { pset: el.getAttribute("data-pset"), attribute: el.getAttribute("data-attr") };
-      $("cfg-attr-search").value = App.selectedAttr.pset + " › " + App.selectedAttr.attribute;
+      const op = App.keyRows[idx] ? App.keyRows[idx].op : "and";
+      App.keyRows[idx] = { pset: el.getAttribute("data-pset"), attribute: el.getAttribute("data-attr"), op };
+      input.value = App.keyRows[idx].pset + " › " + App.keyRows[idx].attribute;
       box.classList.add("hidden");
     });
   });
@@ -695,11 +824,15 @@ function renderAttrResults(filter) {
 function buildRuleFromForm() {
   const sh = $("save-hint");
   const folder = App.selectedFolderId;
-  if (!App.selectedAttr) { sh.textContent = "Bitte ein Attribut wählen."; sh.className = "hint warn"; return null; }
+  const keys = (App.keyRows || [])
+    .filter((r) => r && r.attribute)
+    .map((r, i) => ({ pset: r.pset || "", attribute: r.attribute, op: (i > 0 && r.op === "or") ? "or" : "and" }));
+  if (!keys.length) { sh.textContent = "Bitte mindestens ein Attribut wählen."; sh.className = "hint warn"; return null; }
   if (!folder) { sh.textContent = "Bitte einen Ordner wählen."; sh.className = "hint warn"; return null; }
   return {
-    pset: App.selectedAttr.pset,
-    attribute: App.selectedAttr.attribute,
+    keys,
+    pset: keys[0].pset,        // Spiegel des ersten Attributs (Abwaertskompatibilitaet)
+    attribute: keys[0].attribute,
     targetFolderId: folder,
     targetFolderName: App.selectedFolderName || "",
     matchMode: $("cfg-match").value,
@@ -850,7 +983,11 @@ function showAbout() {
 
 // Formular aus der wirksamen Konfig (effective) füllen.
 function fillConfigForm() {
-  if (!(App.config && App.config.rules[0])) return;
+  if (!(App.config && App.config.rules[0])) {
+    App.keyRows = [{ pset: "", attribute: "", op: "and" }];
+    renderKeyRows();
+    return;
+  }
   const r = App.config.rules[0];
   App.selectedFolderId = r.targetFolderId || null;
   App.selectedFolderName = r.targetFolderName || r.targetFolderId || "";
@@ -858,8 +995,11 @@ function fillConfigForm() {
   $("cfg-match").value = r.matchMode || "exact";
   $("cfg-filetype").value = r.fileType || "all";
   $("cfg-skiparchive").value = r.skipArchive || "1";
-  App.selectedAttr = { pset: r.pset, attribute: r.attribute };
-  $("cfg-attr-search").value = r.pset + " › " + r.attribute;
+  const keys = ruleKeys(r);
+  App.keyRows = keys.length
+    ? keys.map((k, i) => ({ pset: k.pset || "", attribute: k.attribute || "", op: (i > 0 && k.op === "or") ? "or" : "and" }))
+    : [{ pset: "", attribute: "", op: "and" }];
+  renderKeyRows();
 }
 
 function showConfig() {
@@ -893,22 +1033,12 @@ function bindUI() {
     if (e.target.closest(".js-all")) showModelLists();
   });
 
-  const searchEl = $("cfg-attr-search");
-  let t;
-  searchEl.addEventListener("focus", async () => {
-    if (!App.attrChoices.length && !App.attrLoading) await loadAttributeChoices();
-    renderAttrResults(searchEl.value);
-  });
-  searchEl.addEventListener("input", () => {
-    clearTimeout(t);
-    t = setTimeout(() => renderAttrResults(searchEl.value), 100);
-  });
-  searchEl.addEventListener("blur", () => {
-    setTimeout(() => $("cfg-attr-results").classList.add("hidden"), 150);
-  });
+  $("btn-add-attr").addEventListener("click", addAttrRow);
   $("btn-attr-reload").addEventListener("click", async () => {
     await loadAttributeChoices(true);
-    renderAttrResults(searchEl.value);
+    const wrap = $("cfg-attr-rows");
+    const rowEl = wrap.querySelector('.attr-row[data-idx="' + (App.activeRow || 0) + '"]') || wrap.querySelector(".attr-row");
+    if (rowEl) renderAttrResults(rowEl.querySelector(".attr-search").value, Number(rowEl.getAttribute("data-idx")));
   });
 
   $("btn-pick-folder").addEventListener("click", openFolderBrowser);
