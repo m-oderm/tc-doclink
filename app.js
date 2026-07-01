@@ -22,6 +22,7 @@ const App = {
   modelLists: null,    // gecachtes Ergebnis des Modell-Scans: [{key, file}]
   fileObjects: null,   // fileId -> [{modelId, runtimeId}] für „Im Modell wählen"
   attrDecimals: null,  // aus der Mehrheit der Werte abgeleitete Nachkommastellen
+  fileIndexTruncated: false, // true, wenn der Ordner-Scan wegen der Limits abgeschnitten wurde
 };
 
 const $ = (id) => document.getElementById(id);
@@ -294,7 +295,8 @@ function renderModelLists(result) {
   const out = $("runtime-out");
   if (!result.length) {
     out.innerHTML = card('<div class="empty">Keine passenden Listen im geladenen Modell.<br>'
-      + '<span class="hint">Stimmen Attribut und Ordner in den Einstellungen?</span></div>');
+      + '<span class="hint">Stimmen Attribut und Ordner in den Einstellungen?</span></div>'
+      + truncationNote());
     return;
   }
   let html = '<div class="badge">' + result.length + " Listen im Modell</div>"
@@ -318,7 +320,7 @@ function renderModelLists(result) {
       + "</div>";
   }
   html += '</div><p class="hint hidden" id="list-empty" style="margin-top:10px">Keine Liste passt zur Suche.</p>';
-  out.innerHTML = card(html);
+  out.innerHTML = card(html + truncationNote());
 
   const search = $("list-search");
   if (search) {
@@ -368,7 +370,8 @@ async function lookupSelected(sel) {
     const hits = await findFilesForKeys(rule.targetFolderId, vals, keys, rule.matchMode, rule.fileType);
     if (!hits.length) {
       out.innerHTML = card('<div class="warn">Keine Liste zu Schlüssel '
-        + '<span class="key">' + esc(displayKey(label)) + "</span> gefunden.</div>" + backLink());
+        + '<span class="key">' + esc(displayKey(label)) + "</span> gefunden.</div>"
+        + truncationNote() + backLink());
       return;
     }
     showResults(label, hits);
@@ -408,6 +411,15 @@ function backLink() {
   return '<button class="ghost js-all" type="button" style="width:100%;margin-top:12px">← Alle Listen</button>';
 }
 
+// Hinweis, falls der Ordner-Scan wegen der Cloudflare-Limits abgeschnitten wurde.
+// Erklaert das haeufige "nichts gefunden" bei sehr grossen Ordnern.
+function truncationNote() {
+  if (!App.fileIndexTruncated) return "";
+  return '<div class="hint warn" style="margin-top:10px">⚠ Der gewählte Ordner ist sehr groß — es '
+    + 'konnten nicht alle Unterordner durchsucht werden, Treffer können fehlen. Bitte in den '
+    + 'Einstellungen einen spezifischeren Unterordner wählen (z. B. direkt den Listen-Ordner).</div>';
+}
+
 function notConfigured() {
   return '<div class="empty">Noch nicht konfiguriert.<br>'
     + '<span class="hint">Oben rechts auf ⚙ tippen, um die Verknüpfung einzurichten.</span></div>';
@@ -430,7 +442,7 @@ function showResults(key, files) {
     }
     html += "</div>";
   }
-  $("runtime-out").innerHTML = card(html + backLink());
+  $("runtime-out").innerHTML = card(html + truncationNote() + backLink());
 }
 
 // Defensiver Durchlauf durch die ObjectProperties-Struktur
@@ -465,6 +477,7 @@ async function ensureFileIndex(folderId, force) {
         headers: { Authorization: "Bearer " + (App.token || "") },
       });
       if (!r.ok) throw new Error("Ordner nicht lesbar (" + r.status + ")");
+      App.fileIndexTruncated = r.headers.get("X-Scan-Truncated") === "1";
       const items = await r.json();
       App.fileIndex = (items || []).filter((i) => i.type !== "FOLDER");
       return App.fileIndex;

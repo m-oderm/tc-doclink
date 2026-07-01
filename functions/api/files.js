@@ -25,10 +25,12 @@ export async function onRequest(context) {
   const MAX_DEPTH = 6;     // Schachtelungstiefe begrenzen
   const MAX_CALLS = 45;    // unter dem Cloudflare-Free-Limit (50 Subrequests/Request)
   let calls = 0;
+  let truncated = false;   // true, wenn der Baum wegen der Limits nicht komplett gescannt wurde
   const files = [];
 
   async function listFolder(id, depth) {
-    if (depth > MAX_DEPTH || calls >= MAX_CALLS) return;
+    if (calls >= MAX_CALLS) { truncated = true; return; }
+    if (depth > MAX_DEPTH) { truncated = true; return; }
     calls++;
     const r = await fetch(base + "/folders/" + encodeURIComponent(id) + "/items",
       { headers: { Authorization: auth, Accept: "application/json" } });
@@ -58,7 +60,7 @@ export async function onRequest(context) {
     // Unterordner DERSELBEN Ebene parallel abfragen (schneller als sequenziell)
     const tasks = [];
     for (const sub of subfolders) {
-      if (calls >= MAX_CALLS) break;
+      if (calls >= MAX_CALLS) { truncated = true; break; }
       tasks.push(listFolder(sub, depth + 1));
     }
     await Promise.all(tasks);
@@ -70,8 +72,9 @@ export async function onRequest(context) {
     return jsonResp({ error: String(e.message || e) }, 502);
   }
 
-  // flache Liste -> Frontend filtert/matcht unverändert weiter
-  return jsonResp(files, 200);
+  // flache Liste -> Frontend filtert/matcht unverändert weiter.
+  // Bei abgeschnittenem Scan Header setzen, damit das Frontend warnen kann.
+  return jsonResp(files, 200, truncated ? { "X-Scan-Truncated": "1" } : null);
 }
 
 // Änderungsdatum defensiv aus möglichen Feldern lesen (Feldname variiert je nach API-Version)
@@ -81,10 +84,10 @@ function pickDate(i) {
     || v.modifiedOn || v.createdOn || i.modifiedAt || i.createdOn || null;
 }
 
-function jsonResp(obj, status) {
+function jsonResp(obj, status, extraHeaders) {
   return new Response(JSON.stringify(obj), {
     status: status || 200,
-    headers: { "Content-Type": "application/json" },
+    headers: Object.assign({ "Content-Type": "application/json" }, extraHeaders || {}),
   });
 }
 async function safeText(r) { try { return await r.text(); } catch (_) { return ""; } }
