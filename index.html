@@ -78,6 +78,13 @@
   .attr-row .combo { flex: 1; min-width: 0; }
   .attr-op { width: auto; flex: 0 0 auto; padding: 11px 8px; }
   .attr-row .iconbtn { width: 40px; min-height: 40px; font-size: 18px; line-height: 1; padding: 0; flex: 0 0 auto; }
+  .ruletabs { display: flex; flex-wrap: wrap; gap: 6px; }
+  .ruletab { background: var(--field); border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px; min-height: 0; font-size: 13px; font-weight: 600; color: var(--fg); cursor: pointer; }
+  .ruletab.on { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+  .ruletab.add { color: var(--accent); background: transparent; }
+  .whenrow { display: flex; gap: 8px; }
+  .whenrow input { flex: 1; min-width: 0; }
+  .whenrow select { width: auto; flex: 0 0 auto; }
   .attr-row .attr-remove { font-size: 22px; }
   .attr-xform { margin: 4px 0 2px; }
   .xform > summary { font-size: 13px; color: var(--accent); cursor: pointer; list-style: none; padding: 2px 0; font-weight: 600; }
@@ -180,6 +187,25 @@
   <section id="view-config" class="hidden">
     <button class="ghost" id="btn-back" style="margin-bottom:12px">← Zurück</button>
     <div class="card stack">
+      <div id="cfg-rule-tabs" class="ruletabs"></div>
+      <div class="row">
+        <label for="cfg-rule-name">Name der Regel
+          <button class="linkbtn hidden" id="cfg-remove-rule" type="button" style="float:right">Regel entfernen</button>
+        </label>
+        <input type="text" id="cfg-rule-name" autocomplete="off" placeholder="z. B. Bewehrung" />
+      </div>
+      <div class="row">
+        <label>Gilt für Bauteile (optional)</label>
+        <div class="whenrow">
+          <input type="text" id="cfg-when-attr" autocomplete="off" placeholder="Attribut, z. B. Bauteilname" />
+          <select id="cfg-when-mode">
+            <option value="equals">ist gleich</option>
+            <option value="contains">enthält</option>
+          </select>
+          <input type="text" id="cfg-when-value" autocomplete="off" placeholder="Wert, z. B. Bewehrung" />
+        </div>
+        <p class="hint">Leer lassen, wenn die Regel für alle Bauteile gelten soll. Bei mehreren Regeln zählt die erste, die passt.</p>
+      </div>
       <div class="row">
         <label>1. Schlüssel-Attribute
           <button class="linkbtn" id="btn-attr-reload" type="button" style="float:right">↻ neu laden</button>
@@ -217,6 +243,11 @@
           <option value="0">mitdurchsuchen</option>
         </select>
         <p class="hint">Ordner wie „alt“, „archiv“, „old“, „backup“ werden beim Suchen übersprungen, damit keine veralteten Listen erscheinen.</p>
+      </div>
+      <div class="row">
+        <label for="cfg-namecontains">6. Dateiname muss enthalten (optional)</label>
+        <input type="text" id="cfg-namecontains" autocomplete="off" placeholder="z. B. BEW oder EBT" />
+        <p class="hint">Nur Dateien, deren Name diesen Text enthält. Trennt z. B. Eisenlisten (BEW) von Einbauteillisten (EBT).</p>
       </div>
       <p class="hint" id="cfg-scope-note"></p>
       <button class="primary" id="btn-save-user">Für mich speichern</button>
@@ -288,6 +319,20 @@
             Projekt-Standard zurücksetzen" wieder zur Vorgabe wechseln.</li>
       </ul>
       <p>Hinweis: Meist richtet das DBA-Team den Projekt-Standard ein. Dann musst du nichts tun.</p>
+
+      <h2>Mehrere Regeln je Bauteiltyp</h2>
+      <p>Haben verschiedene Bauteiltypen ihre Listen in verschiedenen Ordnern oder mit anderem
+         Format, legst du oben pro Typ eine Regel an (Knopf „+ Regel"). Jede Regel hat einen
+         Namen, eigene Schlüssel-Attribute, einen eigenen Ordner und einen eigenen Abgleich.</p>
+      <ul>
+        <li><strong>Gilt für Bauteile:</strong> so weiss die Erweiterung, welche Regel zu einem
+            Bauteil gehört. Beispiel: Attribut <code>Bauteilname</code> ist gleich
+            <code>Bewehrung</code>. Leer heisst: gilt für alle. Bei mehreren Regeln zählt die
+            erste, die passt.</li>
+        <li><strong>Dateiname muss enthalten:</strong> zeigt nur Dateien mit diesem Text im
+            Namen. So trennst du zum Beispiel Eisenlisten (<code>BEW</code>) von
+            Einbauteillisten (<code>EBT</code>).</li>
+      </ul>
 
       <h2>Tägliche Nutzung</h2>
       <ul>

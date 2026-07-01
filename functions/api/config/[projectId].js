@@ -15,10 +15,11 @@
 // niemals vom Client uebernommen. Die Admin-Rolle wird ueber die Projekt-Benutzerliste
 // gelesen (Core-API GET /projects/{id}/users) und faellt im Zweifel auf "kein Admin".
 
-const ALLOWED_FIELDS = ["pset", "attribute", "targetFolderId", "targetFolderName", "matchMode", "fileType", "skipArchive"];
+const ALLOWED_FIELDS = ["name", "pset", "attribute", "targetFolderId", "targetFolderName", "matchMode", "fileType", "skipArchive", "nameContains"];
 const MATCH_MODES = ["exact", "contains"];
 const FILE_TYPES = ["all", "pdf", "abs", "word", "excel"];
 const KEY_OPS = ["and", "or"];
+const WHEN_MODES = ["equals", "contains"];
 const MAX_BODY = 16 * 1024; // 16 KB
 const MAX_RULES = 20;
 const MAX_KEYS = 3; // hoechstens drei Schluessel-Attribute pro Regel
@@ -250,6 +251,18 @@ function normalizeConfig(parsed, id) {
     if (out.matchMode && !MATCH_MODES.includes(out.matchMode)) return { ok: false, status: 400, message: "ungueltiger matchMode" };
     if (out.fileType && !FILE_TYPES.includes(out.fileType)) return { ok: false, status: 400, message: "ungueltiger fileType" };
     if (out.skipArchive != null) out.skipArchive = (out.skipArchive === "1" || out.skipArchive === "true") ? "1" : "0";
+
+    // Typ-Bedingung: when = { pset?, attribute, value, mode }. Legt fest, fuer welche
+    // Bauteile diese Regel gilt (z. B. Bauteilname enthaelt "Bewehrung"). Ohne when
+    // gilt die Regel fuer alle (Auffang-Regel).
+    if (r.when && typeof r.when === "object") {
+      const w = {};
+      if (r.when.pset != null) w.pset = String(r.when.pset).slice(0, MAX_FIELD);
+      if (r.when.attribute != null) w.attribute = String(r.when.attribute).slice(0, MAX_FIELD);
+      if (r.when.value != null) w.value = String(r.when.value).slice(0, MAX_FIELD);
+      w.mode = WHEN_MODES.includes(String(r.when.mode || "").toLowerCase()) ? String(r.when.mode).toLowerCase() : "equals";
+      if (w.attribute && w.value) out.when = w; // nur mit Attribut und Wert sinnvoll
+    }
 
     // Mehrere Schluessel-Attribute: keys[] mit pset, attribute, op (and/or).
     // Hoechstens MAX_KEYS, leere Eintraege fallen weg, op ausserhalb der Whitelist wird "and".

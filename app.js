@@ -12,11 +12,12 @@ const App = {
   view: "runtime",
   attrChoices: [],     // zwischengespeicherte Attribute (Bauteil oder ganzes Modell)
   attrLoading: false,  // verhindert parallele Ladevorgänge der Attribut-Auswahl
-  keyRows: [],         // Schlüssel-Attribute der Konfig-Ansicht: [{ pset, attribute, op }]
+  keyRows: [],         // Schlüssel-Attribute der AKTIVEN Regel: [{ pset, attribute, op, transform }]
   activeRow: 0,        // zuletzt fokussierte Attributzeile (für die Trefferliste)
-  fileIndex: null,     // gecachte, flache Dateiliste des Zielordners
-  fileIndexFolder: null,
-  _indexPromise: null,
+  rulesDraft: [],      // Regel-Entwürfe der Konfig-Ansicht (mehrere Regeln)
+  activeRuleIndex: 0,  // gerade bearbeitete Regel
+  fileIndexCache: null, // Map: folderId -> gecachte, flache Dateiliste
+  _indexPromises: null, // Map: folderId -> laufender Scan (Dedup)
   selectedFolderId: null,
   selectedFolderName: "",
   modelLists: null,    // gecachtes Ergebnis des Modell-Scans: [{key, file}]
@@ -62,9 +63,9 @@ const $ = (id) => document.getElementById(id);
   showRuntime();
   startUpdateChecks();
 
-  // Datei-Index im Hintergrund vorladen -> erster Abruf ist schnell
-  if (App.config && App.config.rules[0]) {
-    ensureFileIndex(App.config.rules[0].targetFolderId).catch(() => {});
+  // Datei-Index aller Regel-Ordner im Hintergrund vorladen -> erster Abruf ist schnell
+  for (const r of configRules(App.config)) {
+    if (r.targetFolderId) ensureFileIndex(r.targetFolderId, ruleSkip(r)).catch(() => {});
   }
 })();
 
@@ -181,8 +182,8 @@ function applyConfigResponse(j) {
 }
 
 // scope = "user" (persoenlich) oder "project" (Projekt-Standard, nur Admin).
-async function saveConfig(rule, scope) {
-  const payload = { projectId: App.projectId, rules: [rule] };
+async function saveConfig(rules, scope) {
+  const payload = { projectId: App.projectId, rules: rules };
   const qs = scope === "project" ? "?scope=project" : "?scope=user";
   const r = await fetch("/api/config/" + encodeURIComponent(App.projectId) + qs, {
     method: "PUT",
@@ -223,21 +224,26 @@ async function showModelLists(force) {
   if (!App.config) { out.innerHTML = card(notConfigured()); return; }
   if (!force && App.modelLists) { renderModelLists(App.modelLists); return; }
 
-  const rule = App.config.rules[0];
-  const keys = ruleKeys(rule);
+  const rules = configRules(App.config);
+  if (!rules.length) { out.innerHTML = card(notConfigured()); return; }
+  App.fileIndexTruncated = false;
   out.innerHTML = card('<span class="spinner"></span> &nbsp;Scanne Modell…');
   try {
-    const files = await ensureFileIndex(rule.targetFolderId);
     const modelObjs = await App.api.viewer.getObjects();
     let total = 0;
     for (const mo of (modelObjs || [])) total += (mo.objects || []).length;
 
-    // Bauteile nach ihrer Wertkombination buendeln. Gleiche Kombination = gleiche
-    // Dateien, darum nur einmal abgleichen (haelt die Last gering, auch bei 3 Attributen).
-    const tuples = new Map(); // tupleKey -> { vals, objs: [{ modelId, runtimeId }] }
-    const noteObj = (vals, modelId, runtimeId) => {
+    // Bauteile nach passender Regel und Wertkombination buendeln. Gleiche Regel plus
+    // gleiche Kombination = gleiche Dateien, darum nur einmal abgleichen.
+    const perRule = new Map(); // rule -> Map(tupleKey -> { vals, objs })
+    const noteObj = (propsArray, modelId, runtimeId) => {
+      const rule = pickRule(rules, propsArray);
+      if (!rule) return;
+      const vals = extractValues(propsArray, ruleKeys(rule));
       if (!vals.some(Boolean)) return; // kein einziger Wert -> nichts zu suchen
-      const tupleKey = vals.join("\u0000");
+      let tuples = perRule.get(rule);
+      if (!tuples) { tuples = new Map(); perRule.set(rule, tuples); }
+      const tupleKey = vals.join(" ");
       if (!tuples.has(tupleKey)) tuples.set(tupleKey, { vals, objs: [] });
       if (runtimeId != null) tuples.get(tupleKey).objs.push({ modelId, runtimeId });
     };
@@ -247,7 +253,7 @@ async function showModelLists(force) {
       const need = [];
       for (const o of objs) {
         if (o && o.properties) {                 // Properties evtl. schon dabei
-          noteObj(extractValues([o], keys), mo.modelId, o.id);
+          noteObj([o], mo.modelId, o.id);
           scanned++;
         } else if (o) {
           need.push(o.id);
@@ -257,7 +263,7 @@ async function showModelLists(force) {
         const chunk = need.slice(i, i + SCAN_CHUNK);
         const props = await App.api.viewer.getObjectProperties(mo.modelId, chunk);
         for (const p of (props || [])) {
-          noteObj(extractValues([p], keys), mo.modelId, p.id);
+          noteObj([p], mo.modelId, p.id);
         }
         scanned += chunk.length;
         out.innerHTML = card('<span class="spinner"></span> &nbsp;Scanne Modell… ' + scanned + " / " + total);
@@ -266,19 +272,25 @@ async function showModelLists(force) {
 
     // Genauigkeit aus der Mehrheit der Werte des ersten Attributs ableiten
     // (Ausreisser/Float-Rauschen normalisieren).
-    App.attrDecimals = modalDecimals([...tuples.values()].map((t) => t.vals[0]).filter(Boolean));
+    const allFirst = [];
+    for (const tuples of perRule.values()) for (const t of tuples.values()) if (t.vals[0]) allFirst.push(t.vals[0]);
+    App.attrDecimals = modalDecimals(allFirst);
 
-    // im Modell vorkommende Kombinationen -> passende Dateien (nach Datei dedupliziert)
+    // je Regel den Ordner scannen und die Kombinationen abgleichen (nach Datei dedupliziert)
     const seen = new Set();
     const result = [];
     const fileObjects = new Map(); // fileId -> [{ modelId, runtimeId }]
-    for (const t of tuples.values()) {
-      const matches = matchFilesForKeys(files, t.vals, keys, rule.matchMode, rule.fileType);
-      for (const file of matches) {
-        if (!fileObjects.has(file.id)) fileObjects.set(file.id, []);
-        const arr = fileObjects.get(file.id);
-        for (const o of t.objs) arr.push(o);
-        if (!seen.has(file.id)) { seen.add(file.id); result.push({ key: tupleLabel(t.vals), file }); }
+    for (const [rule, tuples] of perRule.entries()) {
+      const keys = ruleKeys(rule);
+      const files = await ensureFileIndex(rule.targetFolderId, ruleSkip(rule), force === true);
+      for (const t of tuples.values()) {
+        const matches = matchFilesForKeys(files, t.vals, keys, rule.matchMode, rule.fileType, rule.nameContains || "");
+        for (const file of matches) {
+          if (!fileObjects.has(file.id)) fileObjects.set(file.id, []);
+          const arr = fileObjects.get(file.id);
+          for (const o of t.objs) arr.push(o);
+          if (!seen.has(file.id)) { seen.add(file.id); result.push({ key: tupleLabel(t.vals), file }); }
+        }
       }
     }
     App.fileObjects = fileObjects;
@@ -354,9 +366,12 @@ async function lookupSelected(sel) {
     if (!sel || !sel.length || !sel[0].objectRuntimeIds || !sel[0].objectRuntimeIds.length) {
       return showModelLists();
     }
-    const rule = App.config.rules[0];
-    const keys = ruleKeys(rule);
     const props = await App.api.viewer.getObjectProperties(sel[0].modelId, [sel[0].objectRuntimeIds[0]]);
+    // Passende Regel fuer dieses Bauteil waehlen (nach Bauteiltyp), sonst die erste.
+    const rules = configRules(App.config);
+    const rule = pickRule(rules, props) || rules[0];
+    if (!rule) { out.innerHTML = card(notConfigured()); return; }
+    const keys = ruleKeys(rule);
     const vals = extractValues(props, keys);
 
     if (!vals.some(Boolean)) {
@@ -366,7 +381,7 @@ async function lookupSelected(sel) {
       return;
     }
     const label = tupleLabel(vals);
-    const hits = await findFilesForKeys(rule.targetFolderId, vals, keys, rule.matchMode, rule.fileType);
+    const hits = await findFilesForRule(rule, vals);
     if (!hits.length) {
       out.innerHTML = card('<div class="warn">Keine Liste zu Schlüssel '
         + '<span class="key">' + esc(displayKey(label)) + "</span> gefunden.</div>"
@@ -461,17 +476,16 @@ function extractValue(propsArray, psetName, attrName) {
   return "";
 }
 
-// Lädt die (rekursive) Dateiliste des Ordners EINMAL und cached sie.
-async function ensureFileIndex(folderId, force) {
-  if (force || App.fileIndexFolder !== folderId) {
-    App.fileIndex = null;
-    App.fileIndexFolder = folderId;
-    App._indexPromise = null;
-  }
-  if (App.fileIndex) return App.fileIndex;
-  if (!App._indexPromise) {
-    const skip = (App.config && App.config.rules[0] && App.config.rules[0].skipArchive === "1");
-    App._indexPromise = (async () => {
+// Lädt die (rekursive) Dateiliste eines Ordners EINMAL und cached sie je Ordner.
+// Mehrere Regeln koennen verschiedene Ordner haben, darum ein Cache pro folderId.
+async function ensureFileIndex(folderId, skipArchive, force) {
+  if (!App.fileIndexCache) App.fileIndexCache = new Map();
+  if (!App._indexPromises) App._indexPromises = new Map();
+  const key = String(folderId);
+  if (force) { App.fileIndexCache.delete(key); App._indexPromises.delete(key); }
+  if (App.fileIndexCache.has(key)) return App.fileIndexCache.get(key);
+  if (!App._indexPromises.has(key)) {
+    const p = (async () => {
       // Client-orchestrierter Scan: das Frontend fuehrt die Warteschlange, der Server
       // oeffnet pro Aufruf hoechstens 45 Ordner EINE Ebene tief und meldet deren
       // Unterordner. Jeder Ordner wird nur einmal gesendet. So gibt es keine harte
@@ -486,7 +500,6 @@ async function ensureFileIndex(folderId, force) {
         }
       };
       enqueue([folderId]);
-      App.fileIndexTruncated = false;
 
       let first = true;
       let safety = 0;
@@ -494,20 +507,25 @@ async function ensureFileIndex(folderId, force) {
         if (++safety > 400) { App.fileIndexTruncated = true; break; } // Sicherheitsnetz
         const batch = queue.splice(0, 45);
         // Erster Aufruf per GET (Fehler am Startordner wird gemeldet), danach per POST.
-        const res = first ? await fetchFilesGet(batch[0], skip) : await fetchFilesPost(batch, skip);
+        const res = first ? await fetchFilesGet(batch[0], skipArchive) : await fetchFilesPost(batch, skipArchive);
         first = false;
         addFiles(byId, res.files);
         enqueue(res.folders);
         enqueue(res.pending); // ueberzaehlige Eingaben zuruecknehmen (Normalfall leer)
       }
 
-      App.fileIndex = [...byId.values()].filter((i) => i.type !== "FOLDER");
-      return App.fileIndex;
+      const files = [...byId.values()].filter((i) => i.type !== "FOLDER");
+      App.fileIndexCache.set(key, files);
+      return files;
     })();
+    App._indexPromises.set(key, p);
   }
-  try { return await App._indexPromise; }
-  finally { App._indexPromise = null; }
+  try { return await App._indexPromises.get(key); }
+  finally { App._indexPromises.delete(key); }
 }
+
+// skipArchive-Flag einer Regel.
+function ruleSkip(rule) { return !!(rule && rule.skipArchive === "1"); }
 
 function authHeaders() { return { Authorization: "Bearer " + (App.token || "") }; }
 
@@ -679,6 +697,27 @@ function ruleKeys(rule) {
   return [];
 }
 
+// Alle Regeln einer Konfig als Array (mindestens eine, falls vorhanden).
+function configRules(config) {
+  return (config && Array.isArray(config.rules)) ? config.rules : [];
+}
+
+// Gilt diese Regel fuer das Bauteil? Ohne when-Bedingung ist es eine Auffang-Regel.
+function ruleMatchesBauteil(rule, propsArray) {
+  const w = rule && rule.when;
+  if (!w || !w.attribute || !w.value) return true;
+  const val = extractValue(propsArray, w.pset, w.attribute);
+  if (!val) return false;
+  const a = lc(val), b = lc(w.value);
+  return w.mode === "contains" ? a.includes(b) : a === b;
+}
+
+// Erste Regel, die zum Bauteil passt (Reihenfolge zaehlt: speziell vor Auffang).
+function pickRule(rules, propsArray) {
+  for (const r of rules || []) if (ruleMatchesBauteil(r, propsArray)) return r;
+  return null;
+}
+
 // Werte aller Schluessel-Attribute an einem Bauteil (gleiche Reihenfolge wie keys).
 function extractValues(propsArray, keys) {
   return keys.map((k) => extractValue(propsArray, k.pset, k.attribute));
@@ -719,8 +758,13 @@ function matchPoolSingle(pool, value, key, matchMode) {
 
 // Dateien, die zu den Werten passen. Ein Attribut wie bisher; mehrere Attribute
 // werden ueber und/oder verknuepft, dabei gilt pro Wert "enthaelt".
-function matchFilesForKeys(files, vals, keys, matchMode, fileType) {
-  const pool = (files || []).filter((f) => fileAllowed(f.name, fileType));
+// nameContains (optional): Dateiname-Marker, den die Datei enthalten muss (z. B. "EBT").
+function matchFilesForKeys(files, vals, keys, matchMode, fileType, nameContains) {
+  let pool = (files || []).filter((f) => fileAllowed(f.name, fileType));
+  if (nameContains) {
+    const nc = lc(nameContains);
+    pool = pool.filter((f) => lc(f.name).includes(nc));
+  }
   if (keys.length <= 1) return matchPoolSingle(pool, vals[0], keys[0], matchMode);
   return pool.filter((f) => combineMatch(vals, keys, (v, k) => keyTest(f.name, v, k)));
 }
@@ -735,13 +779,17 @@ function displayKey(key) {
   return raw;
 }
 
-async function findFilesForKeys(folderId, vals, keys, matchMode, fileType) {
-  let files = await ensureFileIndex(folderId);
-  let hits = matchFilesForKeys(files, vals, keys, matchMode, fileType);
+// Sucht die Dateien fuer eine Regel (Ordner, Umformung, Dateiname-Marker der Regel).
+async function findFilesForRule(rule, vals) {
+  const keys = ruleKeys(rule);
+  const folderId = rule.targetFolderId;
+  const nc = rule.nameContains || "";
+  let files = await ensureFileIndex(folderId, ruleSkip(rule));
+  let hits = matchFilesForKeys(files, vals, keys, rule.matchMode, rule.fileType, nc);
   if (!hits.length) {
     // evtl. neu hinzugekommene Datei -> Index einmal frisch laden und nochmal suchen
-    files = await ensureFileIndex(folderId, true);
-    hits = matchFilesForKeys(files, vals, keys, matchMode, fileType);
+    files = await ensureFileIndex(folderId, ruleSkip(rule), true);
+    hits = matchFilesForKeys(files, vals, keys, rule.matchMode, rule.fileType, nc);
   }
   return hits;
 }
@@ -1084,12 +1132,10 @@ function renderAttrResults(filter, idx) {
   });
 }
 
-// Liest das Formular aus und baut die Regel. Gibt null zurück, wenn etwas fehlt.
-function buildRuleFromForm() {
-  const sh = $("save-hint");
-  const folder = App.selectedFolderId;
+// Baut die Schluessel-Liste (server-Format) aus den Attributzeilen der aktiven Regel.
+function keysFromRows(rows) {
   const seen = new Set();
-  const keys = (App.keyRows || [])
+  return (rows || [])
     .filter((r) => r && r.attribute)
     .filter((r) => { const k = (r.pset || "") + " " + r.attribute; if (seen.has(k)) return false; seen.add(k); return true; })
     .map((r, i) => {
@@ -1097,18 +1143,119 @@ function buildRuleFromForm() {
       if (r.transform) k.transform = r.transform;
       return k;
     });
-  if (!keys.length) { sh.textContent = "Bitte mindestens ein Attribut wählen."; sh.className = "hint warn"; return null; }
-  if (!folder) { sh.textContent = "Bitte einen Ordner wählen."; sh.className = "hint warn"; return null; }
-  return {
-    keys,
-    pset: keys[0].pset,        // Spiegel des ersten Attributs (Abwaertskompatibilitaet)
-    attribute: keys[0].attribute,
-    targetFolderId: folder,
-    targetFolderName: App.selectedFolderName || "",
-    matchMode: $("cfg-match").value,
-    fileType: $("cfg-filetype").value,
-    skipArchive: $("cfg-skiparchive").value,
-  };
+}
+
+// Aktuelles Formular in den Entwurf der aktiven Regel schreiben.
+function formToActiveRule() {
+  const d = App.rulesDraft[App.activeRuleIndex];
+  if (!d) return;
+  d.keyRows = (App.keyRows || []).map((r) => ({ pset: r.pset || "", attribute: r.attribute || "", op: r.op || "and", transform: r.transform || undefined }));
+  d.targetFolderId = App.selectedFolderId || null;
+  d.targetFolderName = App.selectedFolderName || "";
+  d.matchMode = $("cfg-match").value;
+  d.fileType = $("cfg-filetype").value;
+  d.skipArchive = $("cfg-skiparchive").value;
+  d.name = $("cfg-rule-name").value.trim();
+  d.nameContains = $("cfg-namecontains").value.trim();
+  d.whenAttr = $("cfg-when-attr").value.trim();
+  d.whenValue = $("cfg-when-value").value.trim();
+  d.whenMode = $("cfg-when-mode").value;
+}
+
+// Entwurf der aktiven Regel ins Formular laden.
+function activeRuleToForm() {
+  const d = App.rulesDraft[App.activeRuleIndex] || {};
+  App.selectedFolderId = d.targetFolderId || null;
+  App.selectedFolderName = d.targetFolderName || d.targetFolderId || "";
+  $("folder-display").textContent = App.selectedFolderName || "kein Ordner gewählt";
+  $("cfg-match").value = d.matchMode || "exact";
+  $("cfg-filetype").value = d.fileType || "all";
+  $("cfg-skiparchive").value = d.skipArchive || "1";
+  $("cfg-rule-name").value = d.name || "";
+  $("cfg-namecontains").value = d.nameContains || "";
+  $("cfg-when-attr").value = d.whenAttr || "";
+  $("cfg-when-value").value = d.whenValue || "";
+  $("cfg-when-mode").value = d.whenMode || "equals";
+  App.keyRows = (d.keyRows && d.keyRows.length)
+    ? d.keyRows.map((r) => ({ pset: r.pset || "", attribute: r.attribute || "", op: r.op || "and", transform: r.transform || undefined }))
+    : [{ pset: "", attribute: "", op: "and" }];
+  renderKeyRows();
+}
+
+// Regel-Reiter oben zeichnen.
+function renderRuleTabs() {
+  const wrap = $("cfg-rule-tabs");
+  if (!wrap) return;
+  let html = "";
+  App.rulesDraft.forEach((d, i) => {
+    const label = (d.name && d.name.trim()) ? d.name.trim() : ("Regel " + (i + 1));
+    html += '<button type="button" class="ruletab' + (i === App.activeRuleIndex ? " on" : "") + '" data-idx="' + i + '">' + esc(label) + "</button>";
+  });
+  html += '<button type="button" class="ruletab add" id="cfg-add-rule" title="Regel hinzufügen">+ Regel</button>';
+  wrap.innerHTML = html;
+  wrap.querySelectorAll(".ruletab").forEach((el) => {
+    if (el.id === "cfg-add-rule") { el.addEventListener("click", addRule); return; }
+    el.addEventListener("click", () => switchRule(Number(el.getAttribute("data-idx"))));
+  });
+  // "Regel entfernen" nur wenn mehr als eine Regel existiert.
+  const rm = $("cfg-remove-rule");
+  if (rm) rm.classList.toggle("hidden", App.rulesDraft.length <= 1);
+}
+
+function switchRule(i) {
+  if (i === App.activeRuleIndex) return;
+  formToActiveRule();
+  App.activeRuleIndex = i;
+  activeRuleToForm();
+  renderRuleTabs();
+}
+
+function addRule() {
+  formToActiveRule();
+  App.rulesDraft.push({ keyRows: [{ pset: "", attribute: "", op: "and" }], matchMode: "exact", fileType: "all", skipArchive: "1", whenMode: "equals" });
+  App.activeRuleIndex = App.rulesDraft.length - 1;
+  activeRuleToForm();
+  renderRuleTabs();
+}
+
+function removeActiveRule() {
+  if (App.rulesDraft.length <= 1) return;
+  App.rulesDraft.splice(App.activeRuleIndex, 1);
+  App.activeRuleIndex = Math.max(0, App.activeRuleIndex - 1);
+  activeRuleToForm();
+  renderRuleTabs();
+}
+
+// Alle Regel-Entwuerfe ins Server-Format bringen. Gibt null zurueck (mit Hinweis),
+// wenn eine Regel unvollstaendig ist.
+function buildRulesFromForm() {
+  const sh = $("save-hint");
+  formToActiveRule();
+  const out = [];
+  for (let i = 0; i < App.rulesDraft.length; i++) {
+    const d = App.rulesDraft[i];
+    const keys = keysFromRows(d.keyRows);
+    const label = (d.name && d.name.trim()) ? d.name.trim() : ("Regel " + (i + 1));
+    if (!keys.length) { switchRule(i); sh.textContent = label + ": bitte mindestens ein Attribut wählen."; sh.className = "hint warn"; return null; }
+    if (!d.targetFolderId) { switchRule(i); sh.textContent = label + ": bitte einen Ordner wählen."; sh.className = "hint warn"; return null; }
+    const rule = {
+      name: d.name || "",
+      keys,
+      pset: keys[0].pset,
+      attribute: keys[0].attribute,
+      targetFolderId: d.targetFolderId,
+      targetFolderName: d.targetFolderName || "",
+      matchMode: d.matchMode || "exact",
+      fileType: d.fileType || "all",
+      skipArchive: d.skipArchive || "1",
+    };
+    if (d.nameContains) rule.nameContains = d.nameContains;
+    if (d.whenAttr && d.whenValue) {
+      rule.when = { attribute: d.whenAttr, value: d.whenValue, mode: d.whenMode === "contains" ? "contains" : "equals" };
+    }
+    out.push(rule);
+  }
+  return out;
 }
 
 // Cache des Modell-Scans verwerfen, weil sich die wirksame Regel geändert hat.
@@ -1142,15 +1289,15 @@ async function withBusy(btn, label, fn) {
 
 async function onSaveScope(scope) {
   const sh = $("save-hint");
-  const rule = buildRuleFromForm();
-  if (!rule) return;
+  const rules = buildRulesFromForm();
+  if (!rules) return;
   const btn = $(scope === "project" ? "btn-save-project" : "btn-save-user");
   try {
-    await withBusy(btn, "Speichern…", () => saveConfig(rule, scope));
+    await withBusy(btn, "Speichern…", () => saveConfig(rules, scope));
     sh.textContent = ""; sh.className = "hint";
     toast(scope === "project" ? "Als Projekt-Standard gespeichert" : "Für dich gespeichert", "ok");
     invalidateScan();
-    ensureFileIndex(rule.targetFolderId, true).catch(() => {});
+    for (const r of configRules(App.config)) if (r.targetFolderId) ensureFileIndex(r.targetFolderId, ruleSkip(r), true).catch(() => {});
     renderConfigScopeState(scope);
   } catch (e) {
     sh.textContent = e.message;
@@ -1169,7 +1316,7 @@ async function resetToProjectDefault() {
     invalidateScan();
     fillConfigForm();
     renderConfigScopeState();
-    if (App.config && App.config.rules[0]) ensureFileIndex(App.config.rules[0].targetFolderId, true).catch(() => {});
+    for (const r of configRules(App.config)) if (r.targetFolderId) ensureFileIndex(r.targetFolderId, ruleSkip(r), true).catch(() => {});
   } catch (e) {
     sh.textContent = e.message;
     sh.className = "hint warn";
@@ -1287,25 +1434,30 @@ function showAbout() {
   setView("about");
 }
 
-// Formular aus der wirksamen Konfig (effective) füllen.
+// Regel-Entwuerfe aus der wirksamen Konfig (effective) aufbauen und die erste laden.
 function fillConfigForm() {
-  if (!(App.config && App.config.rules[0])) {
-    App.keyRows = [{ pset: "", attribute: "", op: "and" }];
-    renderKeyRows();
-    return;
-  }
-  const r = App.config.rules[0];
-  App.selectedFolderId = r.targetFolderId || null;
-  App.selectedFolderName = r.targetFolderName || r.targetFolderId || "";
-  $("folder-display").textContent = App.selectedFolderName || "kein Ordner gewählt";
-  $("cfg-match").value = r.matchMode || "exact";
-  $("cfg-filetype").value = r.fileType || "all";
-  $("cfg-skiparchive").value = r.skipArchive || "1";
-  const keys = ruleKeys(r);
-  App.keyRows = keys.length
-    ? keys.map((k, i) => ({ pset: k.pset || "", attribute: k.attribute || "", op: (i > 0 && k.op === "or") ? "or" : "and", transform: k.transform || undefined }))
-    : [{ pset: "", attribute: "", op: "and" }];
-  renderKeyRows();
+  const rules = configRules(App.config);
+  App.rulesDraft = rules.length ? rules.map((r) => {
+    const keys = ruleKeys(r);
+    return {
+      name: r.name || "",
+      keyRows: keys.length
+        ? keys.map((k, i) => ({ pset: k.pset || "", attribute: k.attribute || "", op: (i > 0 && k.op === "or") ? "or" : "and", transform: k.transform || undefined }))
+        : [{ pset: "", attribute: "", op: "and" }],
+      targetFolderId: r.targetFolderId || null,
+      targetFolderName: r.targetFolderName || "",
+      matchMode: r.matchMode || "exact",
+      fileType: r.fileType || "all",
+      skipArchive: r.skipArchive || "1",
+      nameContains: r.nameContains || "",
+      whenAttr: (r.when && r.when.attribute) || "",
+      whenValue: (r.when && r.when.value) || "",
+      whenMode: (r.when && r.when.mode) || "equals",
+    };
+  }) : [{ keyRows: [{ pset: "", attribute: "", op: "and" }], matchMode: "exact", fileType: "all", skipArchive: "1", whenMode: "equals" }];
+  App.activeRuleIndex = 0;
+  activeRuleToForm();
+  renderRuleTabs();
 }
 
 function showConfig() {
@@ -1352,6 +1504,13 @@ function bindUI() {
     const wrap = $("cfg-attr-rows");
     const rowEl = wrap.querySelector('.attr-row[data-idx="' + (App.activeRow || 0) + '"]') || wrap.querySelector(".attr-row");
     if (rowEl) renderAttrResults(rowEl.querySelector(".attr-search").value, Number(rowEl.getAttribute("data-idx")));
+  });
+
+  $("cfg-remove-rule").addEventListener("click", removeActiveRule);
+  // Regelname live in den Reitern zeigen.
+  $("cfg-rule-name").addEventListener("input", () => {
+    const d = App.rulesDraft[App.activeRuleIndex];
+    if (d) { d.name = $("cfg-rule-name").value; renderRuleTabs(); }
   });
 
   $("btn-pick-folder").addEventListener("click", openFolderBrowser);

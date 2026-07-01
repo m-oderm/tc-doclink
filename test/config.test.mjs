@@ -231,6 +231,25 @@ async function run() {
     ok(rT.value.rules[0].keys[0].transform.ignoreSep === true, "ignoreSep:true bleibt erhalten");
   }
 
+  // 15) Regel-Felder fuer mehrere Regeln: name, when, nameContains.
+  {
+    const I = mod._internal;
+    const res = I.normalizeConfig({ rules: [
+      { name: "Bewehrung", nameContains: "BEW", keys: [{ attribute: "Listennummer" }],
+        when: { pset: "Anliker", attribute: "Bauteilname", value: "Bewehrung", mode: "boese" } },
+      { name: "Einbauteile", keys: [{ attribute: "Listennummer" }] },
+    ] }, "p1");
+    const a = res.value.rules[0];
+    ok(a.name === "Bewehrung", "Regelname wird uebernommen");
+    ok(a.nameContains === "BEW", "nameContains wird uebernommen");
+    ok(a.when && a.when.attribute === "Bauteilname" && a.when.value === "Bewehrung", "when wird uebernommen");
+    ok(a.when.mode === "equals", "ungueltiger when.mode wird equals");
+    ok(res.value.rules.length === 2, "zwei Regeln bleiben erhalten");
+
+    const noWhen = I.normalizeConfig({ rules: [{ keys: [{ attribute: "A" }], when: { attribute: "X" } }] }, "p1");
+    ok(noWhen.value.rules[0].when === undefined, "when ohne value wird verworfen (Auffang-Regel)");
+  }
+
   console.log("\n" + passed + " ok, " + failed + " fehlgeschlagen");
   if (failed) process.exit(1);
 }

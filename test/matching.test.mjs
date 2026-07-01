@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 let src = readFileSync(join(here, "..", "app.js"), "utf8");
-src += "\n;globalThis.__m = { ruleKeys, extractValues, combineMatch, valueInFile, matchFilesForKeys, tupleLabel, keyCandidates, applyTransform, splitSegments };";
+src += "\n;globalThis.__m = { ruleKeys, extractValues, combineMatch, valueInFile, matchFilesForKeys, tupleLabel, keyCandidates, applyTransform, splitSegments, ruleMatchesBauteil, pickRule };";
 
 let passed = 0, failed = 0;
 const ok = (c, m) => c ? (passed++, console.log("  ok  - " + m)) : (failed++, console.error("  FAIL- " + m));
@@ -215,6 +215,46 @@ function run() {
     const hits = M.matchFilesForKeys(fs, ["100-1-01.12"], keys, "contains", "all");
     ok(hits.length === 1 && hits[0].name.includes("01.12"),
       "Bewehrung: Segmente ohne Schalter ignorieren Trennzeichen wie bisher");
+  }
+
+  // ---------- Regeln pro Bauteiltyp: Auswahl und Dateiname-Marker ----------
+
+  // ruleMatchesBauteil: when-Bedingung auf Bauteilname.
+  {
+    const bew = props("Anliker", "Bauteilname", "Bewehrung");
+    const ebt = props("Anliker", "Bauteilname", "Rueckbiegeanschluss");
+    const rBew = { when: { pset: "Anliker", attribute: "Bauteilname", value: "Bewehrung", mode: "equals" } };
+    ok(M.ruleMatchesBauteil(rBew, bew) === true, "when equals: Bewehrung passt");
+    ok(M.ruleMatchesBauteil(rBew, ebt) === false, "when equals: Einbauteil passt nicht");
+    ok(M.ruleMatchesBauteil({}, ebt) === true, "ohne when: Auffang-Regel passt immer");
+    const rC = { when: { pset: "Anliker", attribute: "Bauteilname", value: "bewehr", mode: "contains" } };
+    ok(M.ruleMatchesBauteil(rC, bew) === true, "when contains: Teiltreffer passt");
+  }
+
+  // pickRule: erste passende Regel, spezielle vor Auffang.
+  {
+    const rules = [
+      { name: "Bewehrung", when: { attribute: "Bauteilname", value: "Bewehrung", mode: "equals" } },
+      { name: "Einbauteile" }, // Auffang
+    ];
+    ok(M.pickRule(rules, props("Anliker", "Bauteilname", "Bewehrung")).name === "Bewehrung",
+      "pickRule: Bewehrung-Regel fuer Bewehrung");
+    ok(M.pickRule(rules, props("Anliker", "Bauteilname", "Rueckbiegeanschluss")).name === "Einbauteile",
+      "pickRule: Auffang-Regel fuer Einbauteil");
+  }
+
+  // nameContains-Filter trennt EBT von BEW, auch bei gleichem Zahlen-Muster.
+  {
+    const fs = files([
+      "2368.MA_ING_SYN_100-E01-01.12-BEW-DE-obere Lage_V01.pdf",
+      "2368.MA_ING_SYN_100-E01.12-EBT-DE-ACINOXplus_V01.pdf",
+    ]);
+    const keys = [{ attribute: "Listennummer", transform: { segments: [2, 3], ignoreSep: false } }];
+    // Bewehrung 100-1-01.12 -> Segmente 2,3 = "01.12". Ohne Marker traefe es beide (Ueberschneidung).
+    const both = M.matchFilesForKeys(fs, ["100-1-01.12"], keys, "contains", "all");
+    ok(both.length === 2, "ohne Marker: 01.12 trifft BEW und EBT (die Ueberschneidung)");
+    const onlyBew = M.matchFilesForKeys(fs, ["100-1-01.12"], keys, "contains", "all", "BEW");
+    ok(onlyBew.length === 1 && onlyBew[0].name.includes("BEW"), "mit Marker BEW: nur die Eisenliste");
   }
 
   console.log("\n" + passed + " ok, " + failed + " fehlgeschlagen");
