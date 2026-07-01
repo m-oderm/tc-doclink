@@ -472,24 +472,33 @@ async function ensureFileIndex(folderId, force) {
   if (!App._indexPromise) {
     const skip = (App.config && App.config.rules[0] && App.config.rules[0].skipArchive === "1");
     App._indexPromise = (async () => {
-      // Client-orchestrierter Scan: der Server oeffnet pro Aufruf nur so viele Ordner,
-      // wie sein Subrequest-Budget zulaesst, und meldet den Rest als pending. Wir reichen
-      // pending nach, bis der Baum durch ist. So gibt es keine harte Ordner-Grenze mehr.
+      // Client-orchestrierter Scan: das Frontend fuehrt die Warteschlange, der Server
+      // oeffnet pro Aufruf hoechstens 45 Ordner EINE Ebene tief und meldet deren
+      // Unterordner. Jeder Ordner wird nur einmal gesendet. So gibt es keine harte
+      // Ordner-Grenze und nichts geht doppelt oder verloren.
       const byId = new Map();
-      const seen = new Set([String(folderId)]);
+      const seen = new Set();
+      const queue = [];
+      const enqueue = (ids) => {
+        for (const id of ids || []) {
+          const s = String(id);
+          if (s && !seen.has(s)) { seen.add(s); queue.push(s); }
+        }
+      };
+      enqueue([folderId]);
       App.fileIndexTruncated = false;
 
-      // Erster Aufruf per GET: ein Fehler am Startordner wird gemeldet.
-      let res = await fetchFilesGet(folderId, skip);
-      addFiles(byId, res.files);
-      let frontier = freshFolders(res.pending, seen);
-
+      let first = true;
       let safety = 0;
-      while (frontier.length) {
-        if (++safety > 60) { App.fileIndexTruncated = true; break; } // Sicherheitsnetz
-        res = await fetchFilesPost(frontier, skip);
+      while (queue.length) {
+        if (++safety > 400) { App.fileIndexTruncated = true; break; } // Sicherheitsnetz
+        const batch = queue.splice(0, 45);
+        // Erster Aufruf per GET (Fehler am Startordner wird gemeldet), danach per POST.
+        const res = first ? await fetchFilesGet(batch[0], skip) : await fetchFilesPost(batch, skip);
+        first = false;
         addFiles(byId, res.files);
-        frontier = freshFolders(res.pending, seen);
+        enqueue(res.folders);
+        enqueue(res.pending); // ueberzaehlige Eingaben zuruecknehmen (Normalfall leer)
       }
 
       App.fileIndex = [...byId.values()].filter((i) => i.type !== "FOLDER");
@@ -521,24 +530,15 @@ async function fetchFilesPost(folders, skip) {
   return normalizeFilesResponse(await r.json());
 }
 
-// Nimmt sowohl die neue Form { files, pending } als auch eine alte flache Liste entgegen.
+// Nimmt die neue Form { files, folders, pending } entgegen; eine alte flache Liste
+// wird als reine Dateiliste behandelt (Abwaertskompatibilitaet).
 function normalizeFilesResponse(j) {
-  if (Array.isArray(j)) return { files: j, pending: [] };
-  return { files: (j && j.files) || [], pending: (j && j.pending) || [] };
+  if (Array.isArray(j)) return { files: j, folders: [], pending: [] };
+  return { files: (j && j.files) || [], folders: (j && j.folders) || [], pending: (j && j.pending) || [] };
 }
 
 function addFiles(byId, files) {
   for (const f of files || []) if (f && f.id != null && !byId.has(f.id)) byId.set(f.id, f);
-}
-
-// Ordner-Ids, die wir noch nicht gesehen haben (Dedup ueber Aufrufe hinweg).
-function freshFolders(ids, seen) {
-  const out = [];
-  for (const id of ids || []) {
-    const s = String(id);
-    if (!seen.has(s)) { seen.add(s); out.push(s); }
-  }
-  return out;
 }
 
 // Erzeugt Match-Kandidaten für einen Schlüssel und behebt dabei Float-Fehler

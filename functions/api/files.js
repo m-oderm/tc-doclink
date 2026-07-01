@@ -1,24 +1,25 @@
-// Ordner-Scan fuer die Datei-Liste. Zwei Aufruf-Arten:
+// Ordner-Scan fuer die Datei-Liste. Oeffnet die uebergebenen Ordner GENAU EINE Ebene
+// tief und liefert deren Dateien plus deren Unterordner zurueck. Die Rekursion durch den
+// Baum steuert das Frontend (es fuehrt die Warteschlange und ruft die Function mehrmals auf).
 //
 //   GET  /api/files?folderId=...&skipArchive=1        Startordner (Wurzel)
-//   POST /api/files  { folders: [ids], skipArchive }  weitere Ordner (Fortsetzung)
+//   POST /api/files  { folders: [ids], skipArchive }  weitere Ordner (eine Ebene)
 //
-// Antwort: { files: [ { id, name, type:"FILE", versionId, modified } ], pending: [folderId, ...] }
-//   files   = alle in diesem Aufruf gefundenen Dateien (flach).
-//   pending = Ordner, die wegen des Call-Budgets noch nicht geoeffnet wurden.
+// Antwort: { files: [ { id, name, type:"FILE", versionId, modified } ],
+//            folders: [ unterordnerId, ... ],   // neu entdeckte Unterordner
+//            pending: [ ordnerId, ... ] }        // ueberzaehlige Eingaben (falls > Budget)
 //
-// Warum so: Cloudflare Free erlaubt nur ~50 Subrequests pro Function-Aufruf. Ein einziger
-// Aufruf kann darum keinen grossen Ordnerbaum komplett scannen. Das Frontend ruft die
-// Function darum mehrmals auf und reicht die pending-Ordner nach, bis pending leer ist.
-// Jeder Aufruf hat sein eigenes Budget, so gibt es keine harte Obergrenze mehr.
+// Warum so: Cloudflare Free erlaubt nur ~50 Subrequests pro Function-Aufruf. Ein Aufruf
+// oeffnet darum hoechstens MAX_CALLS Ordner. Weil das Frontend die Warteschlange fuehrt und
+// jeden Ordner nur einmal sendet, gibt es keine harte Ordner-Grenze und nichts geht doppelt
+// oder verloren.
 //
 // ⚠️ Region-Host (CORE_API_BASE) gegen euer Projekt pruefen (CH/EU = app21).
 
 // Ordnernamen, die als Archiv gelten (ganzes Wort, damit z. B. "Altbau" NICHT zaehlt).
 const ARCHIVE_RE = /(^|[ _\-])(alt|alte|archiv|archive|old|backup)([ _\-0-9]|$)/i;
 
-const MAX_CALLS = 45;     // unter dem Cloudflare-Free-Limit (50 Subrequests/Request)
-const MAX_ROOTS = 2000;   // Schutz gegen zu grosse pending-Listen pro Aufruf
+const MAX_CALLS = 45;   // unter dem Cloudflare-Free-Limit (50 Subrequests/Request)
 
 export async function onRequest(context) {
   const { request, env } = context;
@@ -29,7 +30,7 @@ export async function onRequest(context) {
   const base = (env.CORE_API_BASE || "").replace(/\/+$/, "");
   if (!base) return jsonResp({ error: "CORE_API_BASE nicht konfiguriert" }, 500);
 
-  // Startordner und Optionen aus GET (?folderId=) oder POST ({ folders: [...] }).
+  // Ordner und Optionen aus GET (?folderId=) oder POST ({ folders: [...] }).
   let roots = [];
   let skipArchive = url.searchParams.get("skipArchive") === "1";
   let rootErrorsFatal = false; // nur beim GET-Erstaufruf zaehlt ein Fehler am Startordner
@@ -43,15 +44,16 @@ export async function onRequest(context) {
     if (folderId) { roots = [String(folderId)]; rootErrorsFatal = true; }
   }
   if (!roots.length) return jsonResp({ error: "folderId fehlt" }, 400);
-  if (roots.length > MAX_ROOTS) roots = roots.slice(0, MAX_ROOTS);
 
-  let calls = 0;
-  let rootError = null; // Status eines fehlgeschlagenen Startordners (nur GET)
+  // Hoechstens MAX_CALLS Ordner pro Aufruf oeffnen; der Rest geht als pending zurueck.
+  const batch = roots.slice(0, MAX_CALLS);
+  const overflow = roots.slice(MAX_CALLS);
+
   const files = [];
-  const seenFolder = new Set();
+  let rootError = null;
 
-  // Oeffnet einen Ordner: sammelt Dateien, liefert die Unterordner-Ids zurueck.
-  async function expand(id, isRoot) {
+  // Oeffnet einen Ordner eine Ebene tief: sammelt Dateien, liefert die Unterordner-Ids.
+  async function expandOne(id, isRoot) {
     let r;
     try {
       r = await fetch(base + "/folders/" + encodeURIComponent(id) + "/items",
@@ -84,29 +86,20 @@ export async function onRequest(context) {
     return subs;
   }
 
-  // Breitensuche in Wellen, bis das Call-Budget erschoepft ist.
-  let frontier = roots.slice();
-  let firstWave = rootErrorsFatal;
-  while (frontier.length && calls < MAX_CALLS) {
-    const room = MAX_CALLS - calls;
-    const batch = frontier.slice(0, room);
-    const rest = frontier.slice(room);
-    calls += batch.length;
-    const results = await Promise.all(batch.map((id, idx) => expand(id, firstWave && idx === 0)));
-    firstWave = false;
-    if (rootError != null) {
-      const status = (rootError === 401 || rootError === 403) ? 403 : 502;
-      return jsonResp({ error: "Ordner nicht lesbar (" + rootError + ")" }, status);
-    }
-    const next = [];
-    for (const subs of results) {
-      for (const s of subs) if (!seenFolder.has(s)) { seenFolder.add(s); next.push(s); }
-    }
-    frontier = rest.concat(next);
+  const results = await Promise.all(batch.map((id, idx) => expandOne(id, rootErrorsFatal && idx === 0)));
+  if (rootError != null) {
+    const status = (rootError === 401 || rootError === 403) ? 403 : 502;
+    return jsonResp({ error: "Ordner nicht lesbar (" + rootError + ")" }, status);
   }
 
-  // frontier = noch nicht geoeffnete Ordner. Das Frontend reicht sie im naechsten Aufruf nach.
-  return jsonResp({ files, pending: frontier }, 200);
+  // Entdeckte Unterordner einsammeln (innerhalb dieses Aufrufs dedupliziert).
+  const seen = new Set();
+  const folders = [];
+  for (const subs of results) {
+    for (const s of subs) if (!seen.has(s)) { seen.add(s); folders.push(s); }
+  }
+
+  return jsonResp({ files, folders, pending: overflow }, 200);
 }
 
 // Aenderungsdatum defensiv aus moeglichen Feldern lesen (Feldname variiert je nach API-Version)

@@ -1,4 +1,4 @@
-// Test des Ordner-Scans (files.js): Budget pro Aufruf, pending-Fortsetzung, skipArchive.
+// Test des Ordner-Scans (files.js): eine Ebene pro Aufruf, plus voller Client-Durchlauf.
 // Ausfuehren: node test/files.test.mjs
 //
 // files.js nutzt ESM-Exporte. Damit Node sie ohne package.json laedt, wird die Datei
@@ -47,8 +47,42 @@ function ctx({ method = "GET", folderId, folders, skipArchive } = {}) {
   return { request: new Request(url, init), env: { CORE_API_BASE: "https://core" } };
 }
 
+// Simuliert den Frontend-Durchlauf: Warteschlange im Client, Server oeffnet eine Ebene.
+async function fullScan(rootId, tree, skipArchive = false) {
+  globalThis.fetch = mockFetch(tree);
+  const byId = new Map();
+  const seen = new Set();
+  const queue = [];
+  const enq = (ids) => { for (const id of ids || []) { const s = String(id); if (s && !seen.has(s)) { seen.add(s); queue.push(s); } } };
+  enq([rootId]);
+  let first = true, calls = 0, safety = 0;
+  while (queue.length) {
+    if (++safety > 400) break;
+    const batch = queue.splice(0, 45);
+    calls++;
+    const c = first ? ctx({ folderId: batch[0], skipArchive }) : ctx({ method: "POST", folders: batch, skipArchive });
+    first = false;
+    const j = await (await mod.onRequest(c)).json();
+    for (const f of j.files) if (!byId.has(f.id)) byId.set(f.id, f);
+    enq(j.folders); enq(j.pending);
+  }
+  return { files: [...byId.values()], calls };
+}
+
 async function run() {
-  // 1) Kleiner Baum innerhalb des Budgets -> alle Dateien, pending leer.
+  // 1) Ein Aufruf oeffnet nur EINE Ebene: Dateien des Ordners + dessen Unterordner.
+  {
+    const tree = {
+      R: { folders: [{ id: "A", name: "A" }], files: [{ id: "r1", name: "r1.pdf" }] },
+      A: { files: [{ id: "a1", name: "a1.pdf" }] },
+    };
+    globalThis.fetch = mockFetch(tree);
+    const j = await (await mod.onRequest(ctx({ folderId: "R" }))).json();
+    ok(j.files.length === 1 && j.files[0].id === "r1", "eine Ebene: nur die Datei des Startordners");
+    ok(j.folders.length === 1 && j.folders[0] === "A", "eine Ebene: Unterordner A wird gemeldet");
+  }
+
+  // 2) Voller Durchlauf, kleiner Baum: alle Dateien inkl. tiefer Ordner.
   {
     const tree = {
       R: { folders: [{ id: "A", name: "A" }, { id: "B", name: "B" }] },
@@ -56,54 +90,48 @@ async function run() {
       B: { folders: [{ id: "C", name: "C" }], files: [{ id: "b1", name: "b1.pdf" }] },
       C: { files: [{ id: "c1", name: "c1.pdf" }] },
     };
-    globalThis.fetch = mockFetch(tree);
-    const res = await mod.onRequest(ctx({ folderId: "R" }));
-    const j = await res.json();
-    ok(res.status === 200, "kleiner Baum: 200");
-    ok(j.files.length === 4, "kleiner Baum: alle 4 Dateien (auch aus Unterordner C)");
-    ok(j.pending.length === 0, "kleiner Baum: pending leer");
+    const { files } = await fullScan("R", tree);
+    ok(files.length === 4, "voller Durchlauf klein: alle 4 Dateien");
   }
 
-  // 2) Budget-Grenze: 50 Unterordner -> GET liefert 44 Dateien und 6 pending, POST holt den Rest.
+  // 3) Grosser, tiefer Baum: 60 Geschosse x 3 Etappen x 1 Datei = 180 Dateien.
+  //    Genau der Fall, der den frueheren Dedup-Bug ausgeloest hat (pending > Budget).
   {
     const tree = { R: { folders: [] } };
-    for (let i = 1; i <= 50; i++) {
-      tree.R.folders.push({ id: "f" + i, name: "f" + i });
-      tree["f" + i] = { files: [{ id: "file" + i, name: "file" + i + ".pdf" }] };
+    let expected = 0;
+    for (let g = 1; g <= 60; g++) {
+      const gid = "g" + g;
+      tree.R.folders.push({ id: gid, name: gid });
+      tree[gid] = { folders: [] };
+      for (let e = 1; e <= 3; e++) {
+        const eid = "e" + g + "_" + e;
+        tree[gid].folders.push({ id: eid, name: eid });
+        tree[eid] = { files: [{ id: "file" + g + "_" + e, name: "L" + g + "_" + e + ".pdf" }] };
+        expected++;
+      }
     }
-    globalThis.fetch = mockFetch(tree);
-    const first = await (await mod.onRequest(ctx({ folderId: "R" }))).json();
-    ok(first.files.length === 44, "Budget: erster Aufruf oeffnet 44 Ordner (1 Wurzel + 44 = 45 Calls)");
-    ok(first.pending.length === 6, "Budget: 6 Ordner bleiben pending");
-
-    const second = await (await mod.onRequest(ctx({ method: "POST", folders: first.pending }))).json();
-    ok(second.files.length === 6, "Fortsetzung: POST holt die restlichen 6 Dateien");
-    ok(second.pending.length === 0, "Fortsetzung: pending danach leer");
-
-    const total = first.files.length + second.files.length;
-    ok(total === 50, "Budget + Fortsetzung: zusammen alle 50 Dateien");
+    const { files, calls } = await fullScan("R", tree);
+    ok(files.length === 180, "grosser Baum: alle 180 Dateien gefunden (kein Verlust)");
+    ok(expected === 180 && calls > 1, "grosser Baum: mehrere Aufruf-Runden noetig (" + calls + ")");
   }
 
-  // 3) skipArchive laesst Archiv-/Alt-Ordner aus.
+  // 4) skipArchive laesst Archiv-/Alt-Ordner aus (im vollen Durchlauf).
   {
     const tree = {
       R: { folders: [{ id: "Data", name: "Data" }, { id: "alt", name: "alt" }] },
       Data: { files: [{ id: "d1", name: "d1.pdf" }] },
       alt: { files: [{ id: "a1", name: "alt1.pdf" }] },
     };
-    globalThis.fetch = mockFetch(tree);
-    const j = await (await mod.onRequest(ctx({ folderId: "R", skipArchive: true }))).json();
-    ok(j.files.length === 1 && j.files[0].id === "d1", "skipArchive: nur Data-Datei, alt uebersprungen");
+    const { files } = await fullScan("R", tree, true);
+    ok(files.length === 1 && files[0].id === "d1", "skipArchive: alt-Ordner uebersprungen");
   }
 
-  // 4) Startordner unlesbar (GET) -> Fehlerstatus.
+  // 5) Startordner unlesbar (GET) -> Fehlerstatus.
   {
     globalThis.fetch = mockFetch({}, { fail: new Set(["R"]), failStatus: 404 });
     const res = await mod.onRequest(ctx({ folderId: "R" }));
     ok(res.status === 502, "Startordner-Fehler (404) -> 502");
   }
-
-  // 5) Startordner 403 -> 403.
   {
     globalThis.fetch = mockFetch({}, { fail: new Set(["R"]), failStatus: 403 });
     const res = await mod.onRequest(ctx({ folderId: "R" }));
@@ -116,6 +144,17 @@ async function run() {
     globalThis.fetch = mockFetch(tree, { fail: new Set(["Y"]), failStatus: 404 });
     const j = await (await mod.onRequest(ctx({ method: "POST", folders: ["X", "Y"] }))).json();
     ok(j.files.length === 1 && j.files[0].id === "x1", "POST: fehlerhafter Teilbaum Y ignoriert, X geliefert");
+  }
+
+  // 7) Mehr als 45 Ordner in einem POST -> Rest kommt als pending zurueck.
+  {
+    const tree = {};
+    const many = [];
+    for (let i = 1; i <= 50; i++) { const id = "p" + i; many.push(id); tree[id] = { files: [{ id: "f" + i, name: "f" + i + ".pdf" }] }; }
+    globalThis.fetch = mockFetch(tree);
+    const j = await (await mod.onRequest(ctx({ method: "POST", folders: many }))).json();
+    ok(j.files.length === 45, "Budget: POST oeffnet hoechstens 45 Ordner");
+    ok(j.pending.length === 5, "Budget: die restlichen 5 kommen als pending zurueck");
   }
 
   console.log("\n" + passed + " ok, " + failed + " fehlgeschlagen");
