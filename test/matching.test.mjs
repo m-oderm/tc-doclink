@@ -243,6 +243,24 @@ function run() {
       "pickRule: Auffang-Regel fuer Einbauteil");
   }
 
+  // Regel nach IFC-Dateiname (sourceContains): BEW gegen EBT.
+  {
+    const p = props("Anliker", "Bauteilname", "egal");
+    const rBew = { sourceContains: "BEW" };
+    const rEbt = { sourceContains: "EBT" };
+    ok(M.ruleMatchesBauteil(rBew, p, "2368_100-E01-BEW-WA_V01.ifc") === true, "sourceContains BEW: BEW-IFC passt");
+    ok(M.ruleMatchesBauteil(rBew, p, "2368_100-E01-EBT-WA_V01.ifc") === false, "sourceContains BEW: EBT-IFC passt nicht");
+    ok(M.ruleMatchesBauteil(rEbt, p, "2368_100-E01-EBT-WA_V01.ifc") === true, "sourceContains EBT: EBT-IFC passt");
+    // pickRule waehlt nach IFC-Datei
+    const rules = [{ name: "Bewehrung", sourceContains: "BEW" }, { name: "Einbauteile", sourceContains: "EBT" }];
+    ok(M.pickRule(rules, p, "x_EBT_y.ifc").name === "Einbauteile", "pickRule: EBT-IFC waehlt Einbauteile-Regel");
+    ok(M.pickRule(rules, p, "x_BEW_y.ifc").name === "Bewehrung", "pickRule: BEW-IFC waehlt Bewehrung-Regel");
+    // when UND sourceContains muessen beide passen
+    const rBoth = { when: { attribute: "Bauteilname", value: "Bewehrung", mode: "equals" }, sourceContains: "BEW" };
+    ok(M.ruleMatchesBauteil(rBoth, props("Anliker", "Bauteilname", "Bewehrung"), "a_BEW.ifc") === true, "when + sourceContains: beide passen");
+    ok(M.ruleMatchesBauteil(rBoth, props("Anliker", "Bauteilname", "Bewehrung"), "a_EBT.ifc") === false, "when + sourceContains: IFC passt nicht -> false");
+  }
+
   // nameContains-Filter trennt EBT von BEW, auch bei gleichem Zahlen-Muster.
   {
     const fs = files([

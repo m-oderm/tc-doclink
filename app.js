@@ -16,6 +16,7 @@ const App = {
   activeRow: 0,        // zuletzt fokussierte Attributzeile (für die Trefferliste)
   rulesDraft: [],      // Regel-Entwürfe der Konfig-Ansicht (mehrere Regeln)
   activeRuleIndex: 0,  // gerade bearbeitete Regel
+  modelNames: null,    // Map: modelId -> IFC-Dateiname (für Regel nach Quelldatei)
   fileIndexCache: null, // Map: folderId -> gecachte, flache Dateiliste
   _indexPromises: null, // Map: folderId -> laufender Scan (Dedup)
   selectedFolderId: null,
@@ -229,6 +230,7 @@ async function showModelLists(force) {
   App.fileIndexTruncated = false;
   out.innerHTML = card('<span class="spinner"></span> &nbsp;Scanne Modell…');
   try {
+    await ensureModelNames(force === true);
     const modelObjs = await App.api.viewer.getObjects();
     let total = 0;
     for (const mo of (modelObjs || [])) total += (mo.objects || []).length;
@@ -237,7 +239,7 @@ async function showModelLists(force) {
     // gleiche Kombination = gleiche Dateien, darum nur einmal abgleichen.
     const perRule = new Map(); // rule -> Map(tupleKey -> { vals, objs })
     const noteObj = (propsArray, modelId, runtimeId) => {
-      const rule = pickRule(rules, propsArray);
+      const rule = pickRule(rules, propsArray, modelNameFor(modelId));
       if (!rule) return;
       const vals = extractValues(propsArray, ruleKeys(rule));
       if (!vals.some(Boolean)) return; // kein einziger Wert -> nichts zu suchen
@@ -366,19 +368,23 @@ async function lookupSelected(sel) {
     if (!sel || !sel.length || !sel[0].objectRuntimeIds || !sel[0].objectRuntimeIds.length) {
       return showModelLists();
     }
+    await ensureModelNames();
+    const modelName = modelNameFor(sel[0].modelId);
     const props = await App.api.viewer.getObjectProperties(sel[0].modelId, [sel[0].objectRuntimeIds[0]]);
-    // Passende Regel fuer dieses Bauteil waehlen (nach Bauteiltyp).
+    // Passende Regel fuer dieses Bauteil waehlen (nach Bauteiltyp oder IFC-Datei).
     const rules = configRules(App.config);
     if (!rules.length) { out.innerHTML = card(notConfigured()); return; }
-    let rule = pickRule(rules, props);
+    let rule = pickRule(rules, props, modelName);
     if (!rule) {
       if (rules.length === 1) {
         rule = rules[0]; // eine einzige Regel gilt immer
       } else {
         // Mehrere Regeln, aber keine Bedingung trifft. Nicht raten, sondern erklaeren.
-        const info = rules.filter((r) => r.when && r.when.attribute)
-          .map((r) => esc(r.when.attribute) + " = „" + esc(extractValue(props, r.when.pset, r.when.attribute) || "(leer)") + "“")
-          .join(", ");
+        const parts = rules.filter((r) => (r.when && r.when.attribute) || r.sourceContains).map((r) => {
+          if (r.sourceContains) return "IFC-Datei „" + esc(modelName || "(unbekannt)") + "“";
+          return esc(r.when.attribute) + " = „" + esc(extractValue(props, r.when.pset, r.when.attribute) || "(leer)") + "“";
+        });
+        const info = [...new Set(parts)].join(", ");
         out.innerHTML = card('<div class="warn">Für dieses Bauteil passt keine Regel. Prüfe in den '
           + 'Einstellungen die Bedingung „Gilt für Bauteile", oder lass eine Regel ohne Bedingung als '
           + 'Auffang. Gelesen am Bauteil: ' + (info || "kein Bedingungs-Attribut gesetzt") + ".</div>" + backLink());
@@ -460,11 +466,14 @@ function ruleBadge(rule) {
   const many = configRules(App.config).length > 1;
   if (!many && !rule.nameContains) return "";
   const name = (rule.name && rule.name.trim()) ? rule.name.trim() : "ohne Name";
-  const when = (rule.when && rule.when.attribute && rule.when.value)
-    ? " · gilt wenn " + esc(rule.when.attribute) + (rule.when.mode === "contains" ? " enthält " : " = ") + "„" + esc(rule.when.value) + "“"
-    : " · gilt für alle Bauteile";
+  let cond = "";
+  if (rule.sourceContains) cond += " · IFC-Datei enthält „" + esc(rule.sourceContains) + "“";
+  if (rule.when && rule.when.attribute && rule.when.value) {
+    cond += " · " + esc(rule.when.attribute) + (rule.when.mode === "contains" ? " enthält " : " = ") + "„" + esc(rule.when.value) + "“";
+  }
+  if (!cond) cond = " · gilt für alle Bauteile";
   const marker = rule.nameContains ? ' · Dateiname enthält „' + esc(rule.nameContains) + '“' : "";
-  return '<div class="badge" style="margin-bottom:8px">Regel: ' + esc(name) + when + marker + "</div><br>";
+  return '<div class="badge" style="margin-bottom:8px">Regel: ' + esc(name) + cond + marker + "</div><br>";
 }
 
 function showResults(key, files, rule) {
@@ -731,20 +740,45 @@ function configRules(config) {
   return (config && Array.isArray(config.rules)) ? config.rules : [];
 }
 
-// Gilt diese Regel fuer das Bauteil? Ohne when-Bedingung ist es eine Auffang-Regel.
-function ruleMatchesBauteil(rule, propsArray) {
+// Gilt diese Regel fuer das Bauteil? Bedingungen: when (Attribut) und sourceContains
+// (IFC-Dateiname). Beide muessen zutreffen, wenn gesetzt. Ohne Bedingung = Auffang.
+function ruleMatchesBauteil(rule, propsArray, modelName) {
   const w = rule && rule.when;
-  if (!w || !w.attribute || !w.value) return true;
-  const val = extractValue(propsArray, w.pset, w.attribute);
-  if (!val) return false;
-  const a = lc(val), b = lc(w.value);
-  return w.mode === "contains" ? a.includes(b) : a === b;
+  if (w && w.attribute && w.value) {
+    const val = extractValue(propsArray, w.pset, w.attribute);
+    if (!val) return false;
+    const a = lc(val), b = lc(w.value);
+    if (!(w.mode === "contains" ? a.includes(b) : a === b)) return false;
+  }
+  if (rule && rule.sourceContains) {
+    if (!lc(modelName || "").includes(lc(rule.sourceContains))) return false;
+  }
+  return true;
 }
 
 // Erste Regel, die zum Bauteil passt (Reihenfolge zaehlt: speziell vor Auffang).
-function pickRule(rules, propsArray) {
-  for (const r of rules || []) if (ruleMatchesBauteil(r, propsArray)) return r;
+function pickRule(rules, propsArray, modelName) {
+  for (const r of rules || []) if (ruleMatchesBauteil(r, propsArray, modelName)) return r;
   return null;
+}
+
+// IFC-Dateinamen der geladenen Modelle einmal holen und cachen (modelId -> Name).
+async function ensureModelNames(force) {
+  if (App.modelNames && !force) return App.modelNames;
+  const m = new Map();
+  try {
+    const models = await App.api.viewer.getModels();
+    for (const md of (models || [])) {
+      const id = md.modelId != null ? md.modelId : md.id;
+      const name = md.name || md.fileName || md.displayName || md.title || "";
+      if (id != null) m.set(String(id), name);
+    }
+  } catch (_) { /* API kennt getModels evtl. nicht -> leere Map */ }
+  App.modelNames = m;
+  return m;
+}
+function modelNameFor(modelId) {
+  return (App.modelNames && App.modelNames.get(String(modelId))) || "";
 }
 
 // Werte aller Schluessel-Attribute an einem Bauteil (gleiche Reihenfolge wie keys).
@@ -1189,6 +1223,7 @@ function formToActiveRule() {
   d.whenAttr = $("cfg-when-attr").value.trim();
   d.whenValue = $("cfg-when-value").value.trim();
   d.whenMode = $("cfg-when-mode").value;
+  d.sourceContains = $("cfg-source-contains").value.trim();
 }
 
 // Entwurf der aktiven Regel ins Formular laden.
@@ -1205,6 +1240,7 @@ function activeRuleToForm() {
   $("cfg-when-attr").value = d.whenAttr || "";
   $("cfg-when-value").value = d.whenValue || "";
   $("cfg-when-mode").value = d.whenMode || "equals";
+  $("cfg-source-contains").value = d.sourceContains || "";
   App.keyRows = (d.keyRows && d.keyRows.length)
     ? d.keyRows.map((r) => ({ pset: r.pset || "", attribute: r.attribute || "", op: r.op || "and", transform: r.transform || undefined }))
     : [{ pset: "", attribute: "", op: "and" }];
@@ -1217,7 +1253,7 @@ function activeRuleToForm() {
 function updateWhenHint() {
   const hint = $("cfg-when-hint");
   if (!hint) return;
-  const isCatchAll = !($("cfg-when-attr").value.trim() && $("cfg-when-value").value.trim());
+  const isCatchAll = !($("cfg-when-attr").value.trim() && $("cfg-when-value").value.trim()) && !$("cfg-source-contains").value.trim();
   const notLast = App.activeRuleIndex < App.rulesDraft.length - 1;
   if (isCatchAll && notLast && App.rulesDraft.length > 1) {
     hint.textContent = "Achtung: Ohne Bedingung fängt diese Regel alle Bauteile ab. Spätere Regeln kommen dann nie dran. Setz eine Bedingung, oder verschieb diese Regel ans Ende.";
@@ -1296,6 +1332,7 @@ function buildRulesFromForm() {
       skipArchive: d.skipArchive || "1",
     };
     if (d.nameContains) rule.nameContains = d.nameContains;
+    if (d.sourceContains) rule.sourceContains = d.sourceContains;
     if (d.whenAttr && d.whenValue) {
       rule.when = { attribute: d.whenAttr, value: d.whenValue, mode: d.whenMode === "contains" ? "contains" : "equals" };
     }
@@ -1496,6 +1533,7 @@ function fillConfigForm() {
       fileType: r.fileType || "all",
       skipArchive: r.skipArchive || "1",
       nameContains: r.nameContains || "",
+      sourceContains: r.sourceContains || "",
       whenAttr: (r.when && r.when.attribute) || "",
       whenValue: (r.when && r.when.value) || "",
       whenMode: (r.when && r.when.mode) || "equals",
@@ -1561,6 +1599,7 @@ function bindUI() {
   // Warnung zur Auffang-Regel live aktualisieren.
   $("cfg-when-attr").addEventListener("input", updateWhenHint);
   $("cfg-when-value").addEventListener("input", updateWhenHint);
+  $("cfg-source-contains").addEventListener("input", updateWhenHint);
 
   $("btn-pick-folder").addEventListener("click", openFolderBrowser);
   $("fb-up").addEventListener("click", fbUp);

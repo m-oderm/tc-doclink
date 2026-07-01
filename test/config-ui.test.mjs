@@ -48,7 +48,7 @@ const C = ctx.__c;
 function run() {
   C.App.projectId = "p1";
   C.App.config = { projectId: "p1", rules: [
-    { name: "Bewehrung", when: { attribute: "Bauteilname", value: "Bewehrung", mode: "equals" }, nameContains: "BEW",
+    { name: "Bewehrung", sourceContains: "BEW", nameContains: "BEW",
       keys: [{ pset: "Anliker", attribute: "Listennummer", op: "and", transform: { segments: [2, 3] } }],
       targetFolderId: "fEisen", targetFolderName: "Eisenlisten", matchMode: "contains", fileType: "pdf", skipArchive: "1" },
     { name: "Einbauteile", when: { attribute: "Bauteilname", value: "Rueckbiege", mode: "contains" }, nameContains: "EBT",
@@ -66,7 +66,7 @@ function run() {
   ok(rules && rules.length === 2, "zwei Regeln ins Server-Format gebaut");
 
   ok(rules[0].name === "Bewehrung" && rules[0].nameContains === "BEW", "Regel 0: Name und Dateiname-Marker");
-  ok(rules[0].when && rules[0].when.value === "Bewehrung" && rules[0].when.mode === "equals", "Regel 0: when equals");
+  ok(rules[0].sourceContains === "BEW", "Regel 0: sourceContains (IFC-Datei) erhalten");
   ok(rules[0].targetFolderId === "fEisen", "Regel 0: Zielordner");
   ok(rules[0].keys[0].transform && JSON.stringify(rules[0].keys[0].transform.segments) === "[2,3]", "Regel 0: Umformung erhalten");
 

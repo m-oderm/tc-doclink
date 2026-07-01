@@ -248,6 +248,9 @@ async function run() {
 
     const noWhen = I.normalizeConfig({ rules: [{ keys: [{ attribute: "A" }], when: { attribute: "X" } }] }, "p1");
     ok(noWhen.value.rules[0].when === undefined, "when ohne value wird verworfen (Auffang-Regel)");
+
+    const src = I.normalizeConfig({ rules: [{ keys: [{ attribute: "A" }], sourceContains: "BEW" }] }, "p1");
+    ok(src.value.rules[0].sourceContains === "BEW", "sourceContains (IFC-Dateiname) wird uebernommen");
   }
 
   console.log("\n" + passed + " ok, " + failed + " fehlgeschlagen");

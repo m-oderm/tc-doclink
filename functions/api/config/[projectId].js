@@ -15,7 +15,7 @@
 // niemals vom Client uebernommen. Die Admin-Rolle wird ueber die Projekt-Benutzerliste
 // gelesen (Core-API GET /projects/{id}/users) und faellt im Zweifel auf "kein Admin".
 
-const ALLOWED_FIELDS = ["name", "pset", "attribute", "targetFolderId", "targetFolderName", "matchMode", "fileType", "skipArchive", "nameContains"];
+const ALLOWED_FIELDS = ["name", "pset", "attribute", "targetFolderId", "targetFolderName", "matchMode", "fileType", "skipArchive", "nameContains", "sourceContains"];
 const MATCH_MODES = ["exact", "contains"];
 const FILE_TYPES = ["all", "pdf", "abs", "word", "excel"];
 const KEY_OPS = ["and", "or"];
