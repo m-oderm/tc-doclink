@@ -460,8 +460,11 @@ function ruleBadge(rule) {
   const many = configRules(App.config).length > 1;
   if (!many && !rule.nameContains) return "";
   const name = (rule.name && rule.name.trim()) ? rule.name.trim() : "ohne Name";
+  const when = (rule.when && rule.when.attribute && rule.when.value)
+    ? " · gilt wenn " + esc(rule.when.attribute) + (rule.when.mode === "contains" ? " enthält " : " = ") + "„" + esc(rule.when.value) + "“"
+    : " · gilt für alle Bauteile";
   const marker = rule.nameContains ? ' · Dateiname enthält „' + esc(rule.nameContains) + '“' : "";
-  return '<div class="badge" style="margin-bottom:8px">Regel: ' + esc(name) + marker + "</div><br>";
+  return '<div class="badge" style="margin-bottom:8px">Regel: ' + esc(name) + when + marker + "</div><br>";
 }
 
 function showResults(key, files, rule) {
@@ -1206,6 +1209,23 @@ function activeRuleToForm() {
     ? d.keyRows.map((r) => ({ pset: r.pset || "", attribute: r.attribute || "", op: r.op || "and", transform: r.transform || undefined }))
     : [{ pset: "", attribute: "", op: "and" }];
   renderKeyRows();
+  updateWhenHint();
+}
+
+// Warnt, wenn eine Regel ohne Bedingung nicht die letzte ist (sie faengt dann alle
+// Bauteile ab, spaetere Regeln kommen nie dran).
+function updateWhenHint() {
+  const hint = $("cfg-when-hint");
+  if (!hint) return;
+  const isCatchAll = !($("cfg-when-attr").value.trim() && $("cfg-when-value").value.trim());
+  const notLast = App.activeRuleIndex < App.rulesDraft.length - 1;
+  if (isCatchAll && notLast && App.rulesDraft.length > 1) {
+    hint.textContent = "Achtung: Ohne Bedingung fängt diese Regel alle Bauteile ab. Spätere Regeln kommen dann nie dran. Setz eine Bedingung, oder verschieb diese Regel ans Ende.";
+    hint.className = "hint warn";
+  } else {
+    hint.textContent = "Leer lassen, wenn die Regel für alle Bauteile gelten soll. Bei mehreren Regeln zählt die erste, die passt.";
+    hint.className = "hint";
+  }
 }
 
 // Regel-Reiter oben zeichnen.
@@ -1538,6 +1558,9 @@ function bindUI() {
     const d = App.rulesDraft[App.activeRuleIndex];
     if (d) { d.name = $("cfg-rule-name").value; renderRuleTabs(); }
   });
+  // Warnung zur Auffang-Regel live aktualisieren.
+  $("cfg-when-attr").addEventListener("input", updateWhenHint);
+  $("cfg-when-value").addEventListener("input", updateWhenHint);
 
   $("btn-pick-folder").addEventListener("click", openFolderBrowser);
   $("fb-up").addEventListener("click", fbUp);
