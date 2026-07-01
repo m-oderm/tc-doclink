@@ -30,7 +30,7 @@ export async function onRequest(context) {
 
   async function listFolder(id, depth) {
     if (calls >= MAX_CALLS) { truncated = true; return; }
-    if (depth > MAX_DEPTH) { truncated = true; return; }
+    if (depth > MAX_DEPTH) return; // Tiefen-Grenze loest KEINE Warnung aus
     calls++;
     const r = await fetch(base + "/folders/" + encodeURIComponent(id) + "/items",
       { headers: { Authorization: auth, Accept: "application/json" } });

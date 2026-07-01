@@ -415,7 +415,7 @@ function backLink() {
 // Erklaert das haeufige "nichts gefunden" bei sehr grossen Ordnern.
 function truncationNote() {
   if (!App.fileIndexTruncated) return "";
-  return '<div class="hint warn" style="margin-top:10px">⚠ Der gewählte Ordner ist sehr groß — es '
+  return '<div class="hint warn" style="margin-top:10px">⚠ Der gewählte Ordner ist sehr gross. Es '
     + 'konnten nicht alle Unterordner durchsucht werden, Treffer können fehlen. Bitte in den '
     + 'Einstellungen einen spezifischeren Unterordner wählen (z. B. direkt den Listen-Ordner).</div>';
 }
@@ -522,7 +522,7 @@ function modalDecimals(values) {
   return best; // null, wenn keine numerischen Werte vorliegen
 }
 
-// Fügt einen Zahl-String hinzu sowie – bei einstelligem Ganzzahlteil – die
+// Fügt einen Zahl-String hinzu sowie (bei einstelligem Ganzzahlteil) die
 // Variante mit führender Null (z. B. "9.999" -> auch "09.999").
 function addNumVariants(set, v) {
   set.add(v);
@@ -670,7 +670,7 @@ function matchFilesForKeys(files, vals, keys, matchMode, fileType) {
   return pool.filter((f) => combineMatch(vals, keys, (v, k) => keyTest(f.name, v, k)));
 }
 
-// Schlüssel für die Anzeige bereinigen — nur offensichtliches Float-Rauschen.
+// Schlüssel für die Anzeige bereinigen, nur offensichtliches Float-Rauschen.
 function displayKey(key) {
   const raw = String(key == null ? "" : key).trim();
   if (/^-?\d+\.\d*(9{4,}|0{4,})\d?$/.test(raw)) {
@@ -708,7 +708,7 @@ async function loadAttributeChoices(force) {
       const choices = await attrsOfSelection(sel);
       if (myId !== attrLoadSeq) return;
       App.attrChoices = choices;
-      hint.textContent = App.attrChoices.length + " Attribute des Bauteils — tippen zum Filtern.";
+      hint.textContent = App.attrChoices.length + " Attribute des Bauteils, tippen zum Filtern.";
     } else {
       hint.textContent = "scanne Modell…";
       const choices = await attrsOfModel((done, total) => {
@@ -716,7 +716,7 @@ async function loadAttributeChoices(force) {
       });
       if (myId !== attrLoadSeq) return;
       App.attrChoices = choices;
-      hint.textContent = App.attrChoices.length + " Attribute im Modell — tippen zum Filtern.";
+      hint.textContent = App.attrChoices.length + " Attribute im Modell, tippen zum Filtern.";
     }
     const wrap = $("cfg-attr-rows");
     const openBox = wrap && wrap.querySelector(".combo-results:not(.hidden)");
@@ -893,7 +893,7 @@ function transformPanelHTML(row, idx) {
     + '<p class="xform-preview">' + esc(previewText(row)) + "</p>"
     + '<details class="xform-adv"' + (rx ? " open" : "") + '>'
     + '<summary>Erweitert</summary>'
-    + '<label for="xform-rx-' + idx + '">Eigenes Muster (Regex) — überschreibt die Bausteine</label>'
+    + '<label for="xform-rx-' + idx + '">Eigenes Muster (Regex), überschreibt die Bausteine</label>'
     + '<input type="text" class="xform-regex" id="xform-rx-' + idx + '" autocomplete="off"'
     + ' placeholder="z. B. (\\d+\\.\\d+)$" value="' + esc(rx) + '" />'
     + "</details>"
@@ -1235,7 +1235,7 @@ function fillConfigForm() {
   const r = App.config.rules[0];
   App.selectedFolderId = r.targetFolderId || null;
   App.selectedFolderName = r.targetFolderName || r.targetFolderId || "";
-  $("folder-display").textContent = App.selectedFolderName || "— kein Ordner gewählt —";
+  $("folder-display").textContent = App.selectedFolderName || "kein Ordner gewählt";
   $("cfg-match").value = r.matchMode || "exact";
   $("cfg-filetype").value = r.fileType || "all";
   $("cfg-skiparchive").value = r.skipArchive || "1";
@@ -1252,7 +1252,7 @@ function showConfig() {
   renderConfigScopeState();
   // Attribute vorab im Hintergrund laden -> Filtern reagiert danach sofort.
   // Danach die Zeilen einmal neu zeichnen, damit die Wert-Bausteine/Vorschau
-  // erscheinen — aber nur, wenn gerade niemand tippt oder eine Liste offen ist.
+  // erscheinen, aber nur, wenn gerade niemand tippt oder eine Liste offen ist.
   loadAttributeChoices().then(() => {
     const wrap = $("cfg-attr-rows");
     const openBox = wrap && wrap.querySelector(".combo-results:not(.hidden)");
