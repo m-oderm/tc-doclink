@@ -79,6 +79,21 @@
   .attr-op { width: auto; flex: 0 0 auto; padding: 11px 8px; }
   .attr-row .iconbtn { width: 40px; min-height: 40px; font-size: 18px; line-height: 1; padding: 0; flex: 0 0 auto; }
   .attr-row .attr-remove { font-size: 22px; }
+  .attr-xform { margin: 4px 0 2px; }
+  .xform > summary { font-size: 13px; color: var(--accent); cursor: pointer; list-style: none; padding: 2px 0; font-weight: 600; }
+  .xform > summary::-webkit-details-marker { display: none; }
+  .xform > summary::before { content: "▸ "; }
+  .xform[open] > summary::before { content: "▾ "; }
+  .xform-body { padding: 8px 0 4px; }
+  .xform-body .hint { margin: 0 0 6px; }
+  .seg-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+  .seg-chip { font-size: 13px; font-weight: 600; padding: 6px 10px; min-height: 0; border: 1px solid var(--line); border-radius: 999px; background: var(--field); color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .seg-chip.on { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+  .xform-check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--fg); margin: 0 0 6px; }
+  .xform-check input { width: auto; }
+  .xform-preview { font-size: 13px; color: var(--muted); margin: 0 0 6px; word-break: break-word; }
+  .xform-adv > summary { font-size: 12px; color: var(--muted); cursor: pointer; padding: 2px 0; }
+  .xform-adv label { margin-top: 6px; }
   .linkbtn { background: none; border: 0; color: var(--accent); padding: 0; min-height: 0; font-size: 13px; font-weight: 600; cursor: pointer; }
   .picked { padding: 11px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--field); font-size: 14px; word-break: break-word; }
   .browser { position: fixed; inset: 0; background: var(--bg); z-index: 50; display: flex; flex-direction: column; padding: 16px; }
@@ -231,6 +246,14 @@
             bis zu drei. Pro Zeile wählst du „und" oder „oder". So suchst du nach mehreren
             Werten im Dateinamen. Ein Attribut entfernst du mit dem Knopf <code>×</code>.
             Dasselbe Attribut lässt sich nicht zweimal wählen.</li>
+        <li><strong>Abgleich anpassen (optional):</strong> Stimmt der Attributwert nicht
+            wörtlich mit dem Dateinamen überein, klappe unter dem Attribut „Abgleich
+            anpassen" auf. Der Wert wird in anklickbare Bausteine zerlegt — wähle nur die
+            Teile an, die im Dateinamen stehen (z. B. nur das Suffix). Mit „Trennzeichen
+            ignorieren" spielt es keine Rolle, ob im Wert <code>/</code> und im Dateinamen
+            <code>_</code> steht. Die Vorschau zeigt am gewählten Bauteil, wonach gesucht
+            wird. Für Sonderfälle gibt es unter „Erweitert" ein eigenes Muster (Regex).
+            Ohne Änderung bleibt alles wie bisher.</li>
         <li><strong>Ordner mit den Listen:</strong> über „Ordner wählen…" den Projektordner
             mit den Dateien festlegen.</li>
         <li><strong>Abgleich:</strong> „Dateiname = Attributwert" (exakt) oder „Dateiname

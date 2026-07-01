@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 let src = readFileSync(join(here, "..", "app.js"), "utf8");
-src += "\n;globalThis.__m = { ruleKeys, extractValues, combineMatch, valueInFile, matchFilesForKeys, tupleLabel, keyCandidates };";
+src += "\n;globalThis.__m = { ruleKeys, extractValues, combineMatch, valueInFile, matchFilesForKeys, tupleLabel, keyCandidates, applyTransform, splitSegments };";
 
 let passed = 0, failed = 0;
 const ok = (c, m) => c ? (passed++, console.log("  ok  - " + m)) : (failed++, console.error("  FAIL- " + m));
@@ -102,6 +102,75 @@ function run() {
     const keys = [{ attribute: "A" }, { attribute: "B", op: "and" }];
     const hits = M.matchFilesForKeys(fs, ["437", ""], keys, "exact", "all");
     ok(hits.length === 0, "UND mit fehlendem Wert: kein Treffer");
+  }
+
+  // ---------- Umformung (Segmente / Trennzeichen / Regex) ----------
+
+  // splitSegments zerlegt an beliebigen Trennzeichen
+  ok(JSON.stringify(M.splitSegments("0606/EB_BEWWA/4_K4_XX"))
+    === JSON.stringify(["0606", "EB", "BEWWA", "4", "K4", "XX"]),
+    "splitSegments: teilt an /, _ usw.");
+
+  // applyTransform: Segment-Auswahl
+  ok(M.applyTransform("099-1-02.11", { segments: [2, 3] }) === "02.11",
+    "applyTransform: waehlt nur die gewuenschten Segmente");
+  // applyTransform: Regex mit Gruppe
+  ok(M.applyTransform("099-1-02.11", { regex: "(\\d+\\.\\d+)$" }) === "02.11",
+    "applyTransform: Regex extrahiert die Gruppe");
+  ok(M.applyTransform("099-1-02.11", null) === "099-1-02.11",
+    "applyTransform: ohne Umformung unveraendert");
+
+  // Fall 1: Listennummer 099-1-02.11, Datei traegt 099-U11-02.11.
+  // Suffix 02.11 (Segmente) UND Etappe U11 -> genau eine Datei.
+  {
+    const fs = files([
+      "2368.MA_ING_SYN_099-U11-02.11-BEW-DE-untere Lage_V01.pdf",
+      "2368.MA_ING_SYN_099-U11-01.12-BEW-DE-obere Lage_V01.pdf",
+      "2368.MA_ING_SYN_099-U11-02.12-BEW-DE-obere Lage_V01.pdf",
+    ]);
+    const keys = [{ attribute: "Listennummer", transform: { segments: [2, 3] } },
+      { attribute: "Etappe", op: "and" }];
+    const hits = M.matchFilesForKeys(fs, ["099-1-02.11", "U11"], keys, "exact", "all");
+    ok(hits.length === 1 && hits[0].name.includes("02.11"),
+      "Segment-Suffix + Etappe trifft genau die richtige Liste");
+  }
+
+  // Ohne Umformung wuerde die Listennummer hier nichts finden (Beleg fuers Problem).
+  {
+    const fs = files(["2368.MA_ING_SYN_099-U11-02.11-BEW-DE-untere Lage_V01.pdf"]);
+    const keys = [{ attribute: "Listennummer" }];
+    const hits = M.matchFilesForKeys(fs, ["099-1-02.11"], keys, "contains", "all");
+    ok(hits.length === 0, "Ohne Umformung: 099-1-02.11 steht nicht im Dateinamen");
+  }
+
+  // Fall 2: Wert 0606/EB_BEWWA/4_K4_XX, Datei hat 0606_BEWWA_4_K4_XX (EB fehlt).
+  // Stoer-Segment EB abwaehlen, Trennzeichen werden bei Segment-Auswahl ignoriert.
+  {
+    const fs = files([
+      "USZ_MIT1_52_TRW_BM_0606_BEWWA_4_K4_XX_Bewehrungliste Kernwaende Ebene B_001.pdf",
+      "USZ_MIT1_52_TRW_BM_0606_BEWWA_4_K4_YY_irgendwas_001.pdf",
+    ]);
+    const keys = [{ attribute: "RC_11", transform: { segments: [0, 2, 3, 4, 5] } }];
+    const hits = M.matchFilesForKeys(fs, ["0606/EB_BEWWA/4_K4_XX"], keys, "contains", "all");
+    ok(hits.length === 1 && hits[0].name.includes("K4_XX"),
+      "Segment-Auswahl ohne EB trifft trotz / vs _ die richtige Datei");
+  }
+
+  // Trennzeichen ignorieren am ganzen Wert (ohne Segment-Auswahl)
+  {
+    const fs = files(["a_0606_BEWWA_b.pdf"]);
+    const keys = [{ attribute: "X", transform: { ignoreSep: true } }];
+    const hits = M.matchFilesForKeys(fs, ["0606/BEWWA"], keys, "contains", "all");
+    ok(hits.length === 1, "Trennzeichen ignorieren: 0606/BEWWA passt auf 0606_BEWWA");
+  }
+
+  // 1:1-Projekt bleibt unveraendert (keine Umformung gesetzt).
+  {
+    const fs = files(["D_EG00_C_01.01_Eisenliste.pdf", "D_EG00_B_01.02_Eisenliste.pdf"]);
+    const keys = [{ attribute: "Listennummer" }];
+    const hits = M.matchFilesForKeys(fs, ["D_EG00_C_01.01"], keys, "contains", "all");
+    ok(hits.length === 1 && hits[0].name.includes("C_01.01"),
+      "1:1-Projekt: ganzer Wert trifft weiterhin direkt");
   }
 
   console.log("\n" + passed + " ok, " + failed + " fehlgeschlagen");

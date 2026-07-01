@@ -237,7 +237,7 @@ async function showModelLists(force) {
     const tuples = new Map(); // tupleKey -> { vals, objs: [{ modelId, runtimeId }] }
     const noteObj = (vals, modelId, runtimeId) => {
       if (!vals.some(Boolean)) return; // kein einziger Wert -> nichts zu suchen
-      const tupleKey = vals.join(" ");
+      const tupleKey = vals.join("\u0000");
       if (!tuples.has(tupleKey)) tuples.set(tupleKey, { vals, objs: [] });
       if (runtimeId != null) tuples.get(tupleKey).objs.push({ modelId, runtimeId });
     };
@@ -533,6 +533,76 @@ function fileAllowed(name, fileType) {
 const lc = (s) => String(s || "").toLowerCase();
 const stripExt = (s) => String(s || "").replace(/\.[^.]+$/, "");
 
+// Trennzeichen, die in Attributwerten und Dateinamen vorkommen koennen
+// (Bindestrich, Punkt, Unterstrich, Schraegstrich, Backslash, Leerraum).
+const SEP_RE = /[-._/\\\s]+/g;
+const splitSegments = (v) => String(v == null ? "" : v).trim().split(SEP_RE).filter(Boolean);
+const stripSep = (s) => String(s || "").replace(SEP_RE, "");
+
+// Wendet die optionale Umformung eines Schluessels auf den Rohwert an und gibt
+// den Suchbegriff zurueck. "" bedeutet: kein Treffer moeglich. Ohne Umformung
+// bleibt der Rohwert unveraendert (= bisheriges Verhalten).
+//  - transform.regex:    extrahiert die erste Gruppe (sonst den ganzen Treffer)
+//  - transform.segments: behaelt nur die gewaehlten, an Trennzeichen geteilten Teile
+function applyTransform(value, transform) {
+  const raw = String(value == null ? "" : value).trim();
+  if (!transform) return raw;
+  if (transform.regex) {
+    try {
+      const m = raw.match(new RegExp(transform.regex, "i"));
+      if (!m) return "";
+      return m[1] != null ? m[1] : m[0];
+    } catch (e) {
+      return raw; // ungueltiges Muster -> wie ohne Umformung behandeln
+    }
+  }
+  if (Array.isArray(transform.segments) && transform.segments.length) {
+    const segs = splitSegments(raw);
+    const picked = transform.segments.map((i) => segs[i]).filter((s) => s != null && s !== "");
+    return picked.join("."); // Trenner egal, da beim Vergleich entfernt
+  }
+  return raw;
+}
+
+// Vergleicht dieser Schluessel separatoren-unempfindlich? Bei Segment-Auswahl und
+// Regex automatisch, sonst nur wenn ausdruecklich gewuenscht.
+function transformIgnoresSep(transform) {
+  return !!(transform && (transform.ignoreSep
+    || transform.regex
+    || (Array.isArray(transform.segments) && transform.segments.length)));
+}
+
+// Suchkandidaten eines Schluessels. Ohne umformende Einstellung gilt die bisherige
+// Float-Normalisierung; bei Segment-/Regex-Umformung der umgeformte Begriff selbst
+// (eine ID, daher keine Zahl-Varianten).
+function keyNeedles(value, transform) {
+  const base = applyTransform(value, transform);
+  if (!base) return [];
+  const reshaped = transform && (transform.regex
+    || (Array.isArray(transform.segments) && transform.segments.length));
+  return reshaped ? [base] : keyCandidates(base);
+}
+
+// Enthaelt der Dateiname einen Kandidaten dieses Schluessels? (key optional)
+function keyTest(fileName, value, key) {
+  const t = key && key.transform;
+  const ign = transformIgnoresSep(t);
+  const cands = keyNeedles(value, t).map((c) => (ign ? stripSep(lc(c)) : lc(c))).filter(Boolean);
+  if (!cands.length) return false;
+  const name = ign ? stripSep(lc(fileName)) : lc(fileName);
+  return cands.some((c) => name.includes(c));
+}
+
+// Entspricht der (endungslose) Dateiname exakt einem Kandidaten?
+function keyTestExact(fileName, value, key) {
+  const t = key && key.transform;
+  const ign = transformIgnoresSep(t);
+  const cands = keyNeedles(value, t).map((c) => (ign ? stripSep(lc(c)) : lc(c))).filter(Boolean);
+  if (!cands.length) return false;
+  const base = ign ? stripSep(lc(stripExt(fileName))) : lc(stripExt(fileName));
+  return cands.some((c) => base === c);
+}
+
 // Schluessel-Attribute einer Regel als Array. Abwaertskompatibel zur frueheren
 // Einzelangabe (pset/attribute).
 function ruleKeys(rule) {
@@ -552,40 +622,39 @@ function tupleLabel(vals) {
 }
 
 // Verknuepft die Einzeltreffer mit und/oder, von links nach rechts ausgewertet.
+// test erhaelt (wert, schluessel, index) -> zusaetzliche Argumente sind optional.
 function combineMatch(vals, keys, test) {
   if (!vals.length) return false;
-  let res = test(vals[0]);
+  let res = test(vals[0], keys[0], 0);
   for (let i = 1; i < vals.length; i++) {
-    const m = test(vals[i]);
+    const m = test(vals[i], keys[i], i);
     res = (keys[i] && keys[i].op === "or") ? (res || m) : (res && m);
   }
   return res;
 }
 
-// Enthaelt der Dateiname einen der Kandidaten dieses Werts?
+// Enthaelt der Dateiname einen der Kandidaten dieses Werts? (ohne Umformung)
 function valueInFile(file, value) {
   if (!value) return false;
-  const name = lc(file.name);
-  return keyCandidates(value).some((c) => c && name.includes(lc(c)));
+  return keyTest(file.name, value, null);
 }
 
 // Ein Attribut: bestehendes Verhalten (exakt bevorzugt, sonst enthaelt).
-function matchPoolSingle(pool, key, matchMode) {
-  const cands = keyCandidates(key).map(lc);
+function matchPoolSingle(pool, value, key, matchMode) {
   if (matchMode === "contains") {
-    return pool.filter((f) => cands.some((c) => c && lc(f.name).includes(c)));
+    return pool.filter((f) => keyTest(f.name, value, key));
   }
-  const exact = pool.filter((f) => cands.some((c) => c && lc(stripExt(f.name)) === c));
+  const exact = pool.filter((f) => keyTestExact(f.name, value, key));
   if (exact.length) return exact;
-  return pool.filter((f) => cands.some((c) => c && lc(f.name).includes(c)));
+  return pool.filter((f) => keyTest(f.name, value, key));
 }
 
 // Dateien, die zu den Werten passen. Ein Attribut wie bisher; mehrere Attribute
 // werden ueber und/oder verknuepft, dabei gilt pro Wert "enthaelt".
 function matchFilesForKeys(files, vals, keys, matchMode, fileType) {
   const pool = (files || []).filter((f) => fileAllowed(f.name, fileType));
-  if (keys.length <= 1) return matchPoolSingle(pool, vals[0], matchMode);
-  return pool.filter((f) => combineMatch(vals, keys, (v) => valueInFile(f, v)));
+  if (keys.length <= 1) return matchPoolSingle(pool, vals[0], keys[0], matchMode);
+  return pool.filter((f) => combineMatch(vals, keys, (v, k) => keyTest(f.name, v, k)));
 }
 
 // Schlüssel für die Anzeige bereinigen — nur offensichtliches Float-Rauschen.
@@ -733,9 +802,89 @@ function renderKeyRows() {
       html += '<button class="iconbtn attr-add" type="button" title="Attribut hinzufügen" aria-label="Attribut hinzufügen">+</button>';
     }
     html += "</div>";
+    // Optionales Panel "Abgleich anpassen" je gewaehltem Attribut.
+    if (row.attribute) html += transformPanelHTML(row, i);
   });
   wrap.innerHTML = html;
   bindKeyRows();
+}
+
+// Beispielwert eines Attributs aus dem letzten Modell-/Bauteil-Scan.
+function rowSampleValue(row) {
+  if (!row || !row.attribute) return "";
+  const c = (App.attrChoices || []).find(
+    (x) => x.attr === row.attribute && (x.pset || "") === (row.pset || ""));
+  return c && c.value != null ? String(c.value) : "";
+}
+
+// Vorschautext: was beim Abgleich gesucht wird.
+function previewText(row) {
+  const val = rowSampleValue(row);
+  if (!val) return "Bauteil im Modell wählen, um eine Vorschau zu sehen.";
+  const t = row.transform || null;
+  const needle = applyTransform(val, t);
+  if (!needle) return "Aus „" + val + "“ ergibt sich kein Suchbegriff.";
+  return "Aus „" + val + "“ wird „" + needle + "“"
+    + (transformIgnoresSep(t) ? " · Trennzeichen egal" : "");
+}
+
+// Verwirft eine leere Umformung (alles Standard) wieder ganz.
+function normalizeTransform(row) {
+  const t = row.transform;
+  if (!t) return;
+  const hasSeg = Array.isArray(t.segments) && t.segments.length;
+  if (!hasSeg && !t.regex && !t.ignoreSep) row.transform = undefined;
+  else if (!hasSeg && Array.isArray(t.segments)) delete t.segments;
+}
+
+// Aus-/abwaehlen eines Wert-Segments (Chip) fuer Zeile idx.
+function toggleSeg(idx, si) {
+  const row = App.keyRows[idx];
+  if (!row) return;
+  const total = splitSegments(rowSampleValue(row)).length;
+  let cur = (row.transform && Array.isArray(row.transform.segments))
+    ? row.transform.segments.slice()
+    : Array.from({ length: total }, (_, k) => k); // null = alle gewaehlt
+  cur = cur.includes(si) ? cur.filter((x) => x !== si) : cur.concat(si).sort((a, b) => a - b);
+  row.transform = row.transform || {};
+  if (cur.length >= total) delete row.transform.segments; // alle -> Standard
+  else row.transform.segments = cur;
+  normalizeTransform(row);
+}
+
+// HTML des Umform-Panels einer Zeile.
+function transformPanelHTML(row, idx) {
+  const val = rowSampleValue(row);
+  const segs = splitSegments(val);
+  const t = row.transform || null;
+  const sel = (t && Array.isArray(t.segments)) ? new Set(t.segments) : null; // null = alle
+  let chips = "";
+  if (segs.length) {
+    chips = '<div class="seg-chips">'
+      + segs.map((s, si) => '<button type="button" class="seg-chip'
+        + ((!sel || sel.has(si)) ? " on" : "") + '" data-seg="' + si + '">' + esc(s) + "</button>").join("")
+      + "</div>";
+  } else {
+    chips = '<p class="hint">Bauteil im Modell wählen, um den Wert in Bausteine zu zerlegen.</p>';
+  }
+  const ign = !!(t && t.ignoreSep);
+  const rx = (t && t.regex) ? t.regex : "";
+  return '<div class="attr-xform" data-idx="' + idx + '">'
+    + '<details class="xform"' + (t ? " open" : "") + '>'
+    + '<summary>Abgleich anpassen</summary>'
+    + '<div class="xform-body">'
+    + '<p class="hint">Klicke die Teile des Werts an, nach denen gesucht werden soll.</p>'
+    + chips
+    + '<label class="xform-check"><input type="checkbox" class="xform-ign"'
+    + (ign ? " checked" : "") + ' /> Trennzeichen ignorieren (z. B. „/“ = „_“)</label>'
+    + '<p class="xform-preview">' + esc(previewText(row)) + "</p>"
+    + '<details class="xform-adv"' + (rx ? " open" : "") + '>'
+    + '<summary>Erweitert</summary>'
+    + '<label for="xform-rx-' + idx + '">Eigenes Muster (Regex) — überschreibt die Bausteine</label>'
+    + '<input type="text" class="xform-regex" id="xform-rx-' + idx + '" autocomplete="off"'
+    + ' placeholder="z. B. (\\d+\\.\\d+)$" value="' + esc(rx) + '" />'
+    + "</details>"
+    + "</div></details></div>";
 }
 
 function bindKeyRows() {
@@ -765,6 +914,42 @@ function bindKeyRows() {
     const add = rowEl.querySelector(".attr-add");
     if (add) add.addEventListener("click", addAttrRow);
   });
+  bindTransformPanels();
+}
+
+// Bindet die Chips/Checkbox/Regex der "Abgleich anpassen"-Panels (in-place,
+// damit der offene Zustand erhalten bleibt).
+function bindTransformPanels() {
+  const wrap = $("cfg-attr-rows");
+  wrap.querySelectorAll(".attr-xform").forEach((panel) => {
+    const idx = Number(panel.getAttribute("data-idx"));
+    const preview = panel.querySelector(".xform-preview");
+    const refresh = () => { if (preview) preview.textContent = previewText(App.keyRows[idx]); };
+    panel.querySelectorAll(".seg-chip").forEach((chip) => {
+      chip.addEventListener("click", () => {
+        toggleSeg(idx, Number(chip.getAttribute("data-seg")));
+        chip.classList.toggle("on");
+        refresh();
+      });
+    });
+    const ign = panel.querySelector(".xform-ign");
+    if (ign) ign.addEventListener("change", () => {
+      const row = App.keyRows[idx]; if (!row) return;
+      row.transform = row.transform || {};
+      row.transform.ignoreSep = ign.checked;
+      normalizeTransform(row);
+      refresh();
+    });
+    const rx = panel.querySelector(".xform-regex");
+    if (rx) rx.addEventListener("input", () => {
+      const row = App.keyRows[idx]; if (!row) return;
+      row.transform = row.transform || {};
+      const v = rx.value.trim();
+      if (v) row.transform.regex = v; else delete row.transform.regex;
+      normalizeTransform(row);
+      refresh();
+    });
+  });
 }
 
 function addAttrRow() {
@@ -793,10 +978,10 @@ function renderAttrResults(filter, idx) {
   // Attribute, die andere Zeilen schon nutzen, nicht noch einmal anbieten.
   const used = new Set();
   App.keyRows.forEach((r, i) => {
-    if (i !== idx && r && r.attribute) used.add((r.pset || "") + " " + r.attribute);
+    if (i !== idx && r && r.attribute) used.add((r.pset || "") + "\u0000" + r.attribute);
   });
   const matches = App.attrChoices.filter((c) =>
-    !used.has((c.pset || "") + " " + c.attr)
+    !used.has((c.pset || "") + "\u0000" + c.attr)
     && (!f || c.attr.toLowerCase().includes(f) || c.pset.toLowerCase().includes(f)));
   if (!matches.length) {
     box.innerHTML = '<div class="combo-empty">Keine Treffer.</div>';
@@ -825,6 +1010,7 @@ function renderAttrResults(filter, idx) {
       App.keyRows[idx] = { pset: el.getAttribute("data-pset"), attribute: el.getAttribute("data-attr"), op };
       input.value = App.keyRows[idx].pset + " › " + App.keyRows[idx].attribute;
       box.classList.add("hidden");
+      renderKeyRows(); // Panel "Abgleich anpassen" fuer das neue Attribut zeigen
     });
   });
 }
@@ -837,7 +1023,11 @@ function buildRuleFromForm() {
   const keys = (App.keyRows || [])
     .filter((r) => r && r.attribute)
     .filter((r) => { const k = (r.pset || "") + " " + r.attribute; if (seen.has(k)) return false; seen.add(k); return true; })
-    .map((r, i) => ({ pset: r.pset || "", attribute: r.attribute, op: (i > 0 && r.op === "or") ? "or" : "and" }));
+    .map((r, i) => {
+      const k = { pset: r.pset || "", attribute: r.attribute, op: (i > 0 && r.op === "or") ? "or" : "and" };
+      if (r.transform) k.transform = r.transform;
+      return k;
+    });
   if (!keys.length) { sh.textContent = "Bitte mindestens ein Attribut wählen."; sh.className = "hint warn"; return null; }
   if (!folder) { sh.textContent = "Bitte einen Ordner wählen."; sh.className = "hint warn"; return null; }
   return {
@@ -1008,7 +1198,7 @@ function fillConfigForm() {
   $("cfg-skiparchive").value = r.skipArchive || "1";
   const keys = ruleKeys(r);
   App.keyRows = keys.length
-    ? keys.map((k, i) => ({ pset: k.pset || "", attribute: k.attribute || "", op: (i > 0 && k.op === "or") ? "or" : "and" }))
+    ? keys.map((k, i) => ({ pset: k.pset || "", attribute: k.attribute || "", op: (i > 0 && k.op === "or") ? "or" : "and", transform: k.transform || undefined }))
     : [{ pset: "", attribute: "", op: "and" }];
   renderKeyRows();
 }
@@ -1017,8 +1207,16 @@ function showConfig() {
   setView("config");
   fillConfigForm();
   renderConfigScopeState();
-  // Attribute vorab im Hintergrund laden -> Filtern reagiert danach sofort
-  loadAttributeChoices();
+  // Attribute vorab im Hintergrund laden -> Filtern reagiert danach sofort.
+  // Danach die Zeilen einmal neu zeichnen, damit die Wert-Bausteine/Vorschau
+  // erscheinen — aber nur, wenn gerade niemand tippt oder eine Liste offen ist.
+  loadAttributeChoices().then(() => {
+    const wrap = $("cfg-attr-rows");
+    const openBox = wrap && wrap.querySelector(".combo-results:not(.hidden)");
+    const active = document.activeElement;
+    const typing = active && active.classList && active.classList.contains("attr-search");
+    if (!openBox && !typing) renderKeyRows();
+  });
 }
 
 function bindUI() {
