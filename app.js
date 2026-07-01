@@ -367,10 +367,24 @@ async function lookupSelected(sel) {
       return showModelLists();
     }
     const props = await App.api.viewer.getObjectProperties(sel[0].modelId, [sel[0].objectRuntimeIds[0]]);
-    // Passende Regel fuer dieses Bauteil waehlen (nach Bauteiltyp), sonst die erste.
+    // Passende Regel fuer dieses Bauteil waehlen (nach Bauteiltyp).
     const rules = configRules(App.config);
-    const rule = pickRule(rules, props) || rules[0];
-    if (!rule) { out.innerHTML = card(notConfigured()); return; }
+    if (!rules.length) { out.innerHTML = card(notConfigured()); return; }
+    let rule = pickRule(rules, props);
+    if (!rule) {
+      if (rules.length === 1) {
+        rule = rules[0]; // eine einzige Regel gilt immer
+      } else {
+        // Mehrere Regeln, aber keine Bedingung trifft. Nicht raten, sondern erklaeren.
+        const info = rules.filter((r) => r.when && r.when.attribute)
+          .map((r) => esc(r.when.attribute) + " = „" + esc(extractValue(props, r.when.pset, r.when.attribute) || "(leer)") + "“")
+          .join(", ");
+        out.innerHTML = card('<div class="warn">Für dieses Bauteil passt keine Regel. Prüfe in den '
+          + 'Einstellungen die Bedingung „Gilt für Bauteile", oder lass eine Regel ohne Bedingung als '
+          + 'Auffang. Gelesen am Bauteil: ' + (info || "kein Bedingungs-Attribut gesetzt") + ".</div>" + backLink());
+        return;
+      }
+    }
     const keys = ruleKeys(rule);
     const vals = extractValues(props, keys);
 
@@ -383,12 +397,12 @@ async function lookupSelected(sel) {
     const label = tupleLabel(vals);
     const hits = await findFilesForRule(rule, vals);
     if (!hits.length) {
-      out.innerHTML = card('<div class="warn">Keine Liste zu Schlüssel '
+      out.innerHTML = card(ruleBadge(rule) + '<div class="warn">Keine Liste zu Schlüssel '
         + '<span class="key">' + esc(displayKey(label)) + "</span> gefunden.</div>"
         + truncationNote() + backLink());
       return;
     }
-    showResults(label, hits);
+    showResults(label, hits, rule);
   } catch (e) {
     out.innerHTML = card('<div class="warn">Fehler: ' + esc(e.message || String(e)) + "</div>");
   }
@@ -439,9 +453,21 @@ function notConfigured() {
     + '<span class="hint">Oben rechts auf ⚙ tippen, um die Verknüpfung einzurichten.</span></div>';
 }
 
-function showResults(key, files) {
+// Zeigt an, welche Regel gegriffen hat (nur wenn es mehr als eine gibt oder ein
+// Marker gesetzt ist). Hilft zu sehen, warum welche Dateien erscheinen.
+function ruleBadge(rule) {
+  if (!rule) return "";
+  const many = configRules(App.config).length > 1;
+  if (!many && !rule.nameContains) return "";
+  const name = (rule.name && rule.name.trim()) ? rule.name.trim() : "ohne Name";
+  const marker = rule.nameContains ? ' · Dateiname enthält „' + esc(rule.nameContains) + '“' : "";
+  return '<div class="badge" style="margin-bottom:8px">Regel: ' + esc(name) + marker + "</div><br>";
+}
+
+function showResults(key, files, rule) {
   const sorted = files.slice().sort((a, b) => String(a.name).localeCompare(String(b.name)));
-  let html = '<div class="badge">Schlüssel <span class="key">' + esc(displayKey(key)) + "</span></div>";
+  let html = ruleBadge(rule)
+    + '<div class="badge">Schlüssel <span class="key">' + esc(displayKey(key)) + "</span></div>";
   if (sorted.length === 1) {
     const f = sorted[0];
     html += '<div class="result-name" style="margin:8px 0">' + esc(f.name) + "</div>"
