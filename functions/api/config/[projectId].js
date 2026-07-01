@@ -38,7 +38,7 @@ function normalizeTransform(t) {
     }
     if (segs.length) out.segments = segs.sort((a, b) => a - b);
   }
-  if (t.ignoreSep === true) out.ignoreSep = true;
+  if (typeof t.ignoreSep === "boolean") out.ignoreSep = t.ignoreSep; // true und false explizit merken
   if (t.regex != null) {
     const rx = String(t.regex).slice(0, MAX_FIELD);
     if (rx) {

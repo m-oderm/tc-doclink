@@ -631,12 +631,13 @@ function applyTransform(value, transform) {
   return raw;
 }
 
-// Vergleicht dieser Schluessel separatoren-unempfindlich? Bei Segment-Auswahl und
-// Regex automatisch, sonst nur wenn ausdruecklich gewuenscht.
+// Vergleicht dieser Schluessel separatoren-unempfindlich? Ein ausdruecklich gesetzter
+// Schalter (true oder false) gilt immer. Ist er nicht gesetzt, ignorieren Segment-Auswahl
+// und Regex die Trennzeichen automatisch (bisheriges Standardverhalten).
 function transformIgnoresSep(transform) {
-  return !!(transform && (transform.ignoreSep
-    || transform.regex
-    || (Array.isArray(transform.segments) && transform.segments.length)));
+  if (!transform) return false;
+  if (typeof transform.ignoreSep === "boolean") return transform.ignoreSep;
+  return !!(transform.regex || (Array.isArray(transform.segments) && transform.segments.length));
 }
 
 // Suchkandidaten eines Schluessels. Ohne umformende Einstellung gilt die bisherige
@@ -934,7 +935,7 @@ function transformPanelHTML(row, idx) {
   } else {
     chips = '<p class="hint">Bauteil im Modell wählen, um den Wert in Bausteine zu zerlegen.</p>';
   }
-  const ign = !!(t && t.ignoreSep);
+  const ign = transformIgnoresSep(t); // Checkbox zeigt den echten aktuellen Zustand
   const rx = (t && t.regex) ? t.regex : "";
   return '<div class="attr-xform" data-idx="' + idx + '">'
     + '<details class="xform"' + (t ? " open" : "") + '>'
@@ -944,6 +945,7 @@ function transformPanelHTML(row, idx) {
     + chips
     + '<label class="xform-check"><input type="checkbox" class="xform-ign"'
     + (ign ? " checked" : "") + ' /> Trennzeichen ignorieren (z. B. „/“ = „_“)</label>'
+    + '<p class="hint">Ausschalten macht den Abgleich strenger. Der Punkt in „1.01“ bleibt dann erhalten und trifft nur „…E01.01…“, nicht „…E01-01.12…“.</p>'
     + '<p class="xform-preview">' + esc(previewText(row)) + "</p>"
     + '<details class="xform-adv"' + (rx ? " open" : "") + '>'
     + '<summary>Erweitert</summary>'

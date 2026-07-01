@@ -173,6 +173,50 @@ function run() {
       "1:1-Projekt: ganzer Wert trifft weiterhin direkt");
   }
 
+  // ---------- Einbauteile: Trennzeichen erhalten macht den Treffer eindeutig ----------
+  // Reale Dateinamen (Screenshot). Wert 100-1.01 (Geschoss-Etappe.Nummer). Nur die
+  // Comax-EBT-Liste hat .01 hinter E01. Mit erhaltenem Punkt trifft "1.01" genau sie.
+  {
+    const fs = files([
+      "2368.MA_ING_SYN_100-E01-01.11-BEW-DE-untere Lage_V01.pdf",
+      "2368.MA_ING_SYN_100-E01-01.12-BEW-DE-obere Lage_V01.pdf",
+      "2368.MA_ING_SYN_100-E01-01.13-BEW-DE-Stosseisen_V01.pdf",
+      "2368.MA_ING_SYN_100-E01-02.01-BEW-WA_V01.pdf",
+      "2368.MA_ING_SYN_100-E01-02.11-BEW-DE-untere Lage_V01.pdf",
+      "2368.MA_ING_SYN_100-E01-02.12-BEW-DE-obere Lage_V01.pdf",
+      "2368.MA_ING_SYN_100-E01-02.13-BEW-DE-Treppe_V01.pdf",
+      "2368.MA_ING_SYN_100-E01-03.01-BEW-WA_V01.pdf",
+      "2368.MA_ING_SYN_100-E01.01-EBT-WA-Comax Typ A_V01.pdf",
+      "2368.MA_ING_SYN_100-E01.02-EBT-WA-Baron C_V01.pdf",
+      "2368.MA_ING_SYN_100-E01.11-EBT-DE-ancoPLUS-D_V01.pdf",
+      "2368.MA_ING_SYN_100-E01.12-EBT-DE-ACINOXplus_V01.pdf",
+      "2368.MA_ING_SYN_100-E01.13-EBT-DE-CRET-Dorn_V01.pdf",
+    ]);
+
+    // Segment-Suffix "1.01", Trennzeichen ERHALTEN (ignoreSep: false) -> genau eine Datei.
+    const keySig = [{ attribute: "Nr", transform: { segments: [1, 2], ignoreSep: false } }];
+    const sig = M.matchFilesForKeys(fs, ["100-1.01"], keySig, "contains", "all");
+    ok(sig.length === 1 && sig[0].name.includes("EBT-WA-Comax"),
+      "Einbauteil: Trennzeichen erhalten -> nur die Comax-EBT-Liste (1 Treffer)");
+
+    // Gleiche Segmente, aber Trennzeichen ignoriert (bisheriges Standardverhalten) -> viele.
+    const keyIgn = [{ attribute: "Nr", transform: { segments: [1, 2] } }];
+    const ign = M.matchFilesForKeys(fs, ["100-1.01"], keyIgn, "contains", "all");
+    ok(ign.length > 1, "Einbauteil: Trennzeichen ignoriert -> viele Treffer (zeigt das Problem)");
+  }
+
+  // Bewehrung bleibt: Segmente "01.12" ohne expliziten Schalter ignorieren weiter (unveraendert).
+  {
+    const fs = files([
+      "2368.MA_ING_SYN_100-E01-01.12-BEW-DE-obere Lage_V01.pdf",
+      "2368.MA_ING_SYN_100-E01-02.12-BEW-DE-obere Lage_V01.pdf",
+    ]);
+    const keys = [{ attribute: "Listennummer", transform: { segments: [2, 3] } }];
+    const hits = M.matchFilesForKeys(fs, ["100-1-01.12"], keys, "contains", "all");
+    ok(hits.length === 1 && hits[0].name.includes("01.12"),
+      "Bewehrung: Segmente ohne Schalter ignorieren Trennzeichen wie bisher");
+  }
+
   console.log("\n" + passed + " ok, " + failed + " fehlgeschlagen");
   if (failed) process.exit(1);
 }

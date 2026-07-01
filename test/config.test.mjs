@@ -221,6 +221,16 @@ async function run() {
     ok(k2.length === 1 && k2[0].attribute === "A2", "key ohne attribute faellt weg");
   }
 
+  // 14) transform.ignoreSep wird als true UND false gespeichert (Trennzeichen-Schalter).
+  {
+    const I = mod._internal;
+    const rF = I.normalizeConfig({ rules: [{ keys: [{ attribute: "A", transform: { segments: [1, 2], ignoreSep: false } }] }] }, "p1");
+    const tF = rF.value.rules[0].keys[0].transform;
+    ok(tF && tF.ignoreSep === false, "ignoreSep:false bleibt erhalten (Trennzeichen zaehlen)");
+    const rT = I.normalizeConfig({ rules: [{ keys: [{ attribute: "A", transform: { ignoreSep: true } }] }] }, "p1");
+    ok(rT.value.rules[0].keys[0].transform.ignoreSep === true, "ignoreSep:true bleibt erhalten");
+  }
+
   console.log("\n" + passed + " ok, " + failed + " fehlgeschlagen");
   if (failed) process.exit(1);
 }
