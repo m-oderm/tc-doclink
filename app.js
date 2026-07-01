@@ -210,10 +210,9 @@ async function refreshRuntime(force) {
   let sel = null;
   try { sel = await App.api.viewer.getSelection(); } catch (_) {}
   if (sel && sel.length && sel[0].objectRuntimeIds && sel[0].objectRuntimeIds.length) {
-    lookupSelected(sel);
-  } else {
-    showModelLists(force === true);
+    return lookupSelected(sel);
   }
+  return showModelLists(force === true);
 }
 
 // Übersicht: nur die Listen, deren Schlüssel im GELADENEN MODELL vorkommen
@@ -1271,7 +1270,7 @@ function showConfig() {
 function bindUI() {
   $("update-reload").addEventListener("click", () => location.reload());
   $("update-close").addEventListener("click", () => $("update-bar").classList.add("hidden"));
-  $("btn-lookup").addEventListener("click", () => refreshRuntime(true));
+  $("btn-lookup").addEventListener("click", () => withBusy($("btn-lookup"), "Aktualisieren…", () => refreshRuntime(true)));
   $("btn-save-user").addEventListener("click", () => onSaveScope("user"));
   $("btn-save-project").addEventListener("click", () => onSaveScope("project"));
   $("btn-settings").addEventListener("click", showConfig);
