@@ -470,20 +470,75 @@ async function ensureFileIndex(folderId, force) {
   }
   if (App.fileIndex) return App.fileIndex;
   if (!App._indexPromise) {
-    const skip = (App.config && App.config.rules[0] && App.config.rules[0].skipArchive === "1") ? "&skipArchive=1" : "";
+    const skip = (App.config && App.config.rules[0] && App.config.rules[0].skipArchive === "1");
     App._indexPromise = (async () => {
-      const r = await fetch("/api/files?folderId=" + encodeURIComponent(folderId) + skip, {
-        headers: { Authorization: "Bearer " + (App.token || "") },
-      });
-      if (!r.ok) throw new Error("Ordner nicht lesbar (" + r.status + ")");
-      App.fileIndexTruncated = r.headers.get("X-Scan-Truncated") === "1";
-      const items = await r.json();
-      App.fileIndex = (items || []).filter((i) => i.type !== "FOLDER");
+      // Client-orchestrierter Scan: der Server oeffnet pro Aufruf nur so viele Ordner,
+      // wie sein Subrequest-Budget zulaesst, und meldet den Rest als pending. Wir reichen
+      // pending nach, bis der Baum durch ist. So gibt es keine harte Ordner-Grenze mehr.
+      const byId = new Map();
+      const seen = new Set([String(folderId)]);
+      App.fileIndexTruncated = false;
+
+      // Erster Aufruf per GET: ein Fehler am Startordner wird gemeldet.
+      let res = await fetchFilesGet(folderId, skip);
+      addFiles(byId, res.files);
+      let frontier = freshFolders(res.pending, seen);
+
+      let safety = 0;
+      while (frontier.length) {
+        if (++safety > 60) { App.fileIndexTruncated = true; break; } // Sicherheitsnetz
+        res = await fetchFilesPost(frontier, skip);
+        addFiles(byId, res.files);
+        frontier = freshFolders(res.pending, seen);
+      }
+
+      App.fileIndex = [...byId.values()].filter((i) => i.type !== "FOLDER");
       return App.fileIndex;
     })();
   }
   try { return await App._indexPromise; }
   finally { App._indexPromise = null; }
+}
+
+function authHeaders() { return { Authorization: "Bearer " + (App.token || "") }; }
+
+// Erster Scan-Aufruf (Wurzel). Fehler am Startordner wird als Ausnahme gemeldet.
+async function fetchFilesGet(folderId, skip) {
+  const qs = "/api/files?folderId=" + encodeURIComponent(folderId) + (skip ? "&skipArchive=1" : "");
+  const r = await fetch(qs, { headers: authHeaders() });
+  if (!r.ok) throw new Error("Ordner nicht lesbar (" + r.status + ")");
+  return normalizeFilesResponse(await r.json());
+}
+
+// Fortsetzung: mehrere Ordner auf einmal, Fehler an einzelnen Teilbaeumen werden ignoriert.
+async function fetchFilesPost(folders, skip) {
+  const r = await fetch("/api/files", {
+    method: "POST",
+    headers: Object.assign({ "Content-Type": "application/json" }, authHeaders()),
+    body: JSON.stringify({ folders, skipArchive: !!skip }),
+  });
+  if (!r.ok) return { files: [], pending: [] };
+  return normalizeFilesResponse(await r.json());
+}
+
+// Nimmt sowohl die neue Form { files, pending } als auch eine alte flache Liste entgegen.
+function normalizeFilesResponse(j) {
+  if (Array.isArray(j)) return { files: j, pending: [] };
+  return { files: (j && j.files) || [], pending: (j && j.pending) || [] };
+}
+
+function addFiles(byId, files) {
+  for (const f of files || []) if (f && f.id != null && !byId.has(f.id)) byId.set(f.id, f);
+}
+
+// Ordner-Ids, die wir noch nicht gesehen haben (Dedup ueber Aufrufe hinweg).
+function freshFolders(ids, seen) {
+  const out = [];
+  for (const id of ids || []) {
+    const s = String(id);
+    if (!seen.has(s)) { seen.add(s); out.push(s); }
+  }
+  return out;
 }
 
 // Erzeugt Match-Kandidaten für einen Schlüssel und behebt dabei Float-Fehler

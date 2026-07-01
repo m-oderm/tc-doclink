@@ -67,7 +67,7 @@ _headers                              Sicherheits-Header, CSP (Report-Only), Cac
 build.sh                              erzeugt version.json beim Build (Commit-Hash)
 wrangler.toml                         Pages-Konfig: KV-Binding CONFIG_KV und CORE_API_BASE
 functions/api/config/[projectId].js   Konfig lesen/speichern: Vorgabe, Überschreibung, Admin-Prüfung
-functions/api/files.js                rekursive Dateiliste eines Ordners (Core-API-Proxy)
+functions/api/files.js                Ordner-Scan (Core-API-Proxy), client-orchestriert ohne harte Ordner-Grenze
 functions/api/browse.js               Ordner-Browser für die Konfig-UI (Core-API-Proxy)
 test/                                 Inline-Tests (Node): config, matching, version
 ```
@@ -157,7 +157,8 @@ Alle Endpunkte erwarten `Authorization: Bearer <trimble-token>` und prüfen serv
 | GET | `/api/config/{projectId}` | liefert `{ default, override, effective, isAdmin }` |
 | PUT | `/api/config/{projectId}?scope=user\|project` | speichert Überschreibung oder Vorgabe (Projekt nur als Admin, sonst 403) |
 | DELETE | `/api/config/{projectId}?scope=user` | löscht die eigene Überschreibung |
-| GET | `/api/files?folderId=...&skipArchive=1` | flache, rekursive Dateiliste eines Ordners |
+| GET | `/api/files?folderId=...&skipArchive=1` | startet den Ordner-Scan, liefert `{ files, pending }` |
+| POST | `/api/files` mit `{ folders, skipArchive }` | Fortsetzung: oeffnet weitere Ordner, liefert `{ files, pending }` |
 | GET | `/api/browse?projectId=...` oder `?folderId=...` | listet Unterordner für den Ordner-Browser |
 
 Eingaben werden serverseitig auf eine Feld-Whitelist beschränkt, in der Grösse begrenzt und normalisiert.
