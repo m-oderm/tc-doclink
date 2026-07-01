@@ -133,6 +133,19 @@
   .updbar-reload { background: var(--accent-fg); color: var(--accent); border: 0; border-radius: 6px; padding: 8px 12px; min-height: 0; font-weight: 600; cursor: pointer; }
   .updbar-close { background: transparent; border: 0; color: var(--accent-fg); font-size: 16px; min-height: 0; padding: 0 4px; cursor: pointer; opacity: .85; }
   .updbar-close:hover { opacity: 1; }
+  .toast {
+    position: fixed; left: 50%; bottom: 20px; z-index: 100;
+    transform: translateX(-50%) translateY(14px);
+    display: inline-flex; align-items: center; gap: 8px;
+    max-width: 90vw; padding: 11px 18px; border-radius: 999px;
+    background: var(--ok); color: #fff; font-size: 14px; font-weight: 650;
+    box-shadow: 0 8px 24px rgba(0,0,0,.22);
+    opacity: 0; pointer-events: none;
+    transition: opacity .25s ease, transform .25s ease;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .toast.warn { background: var(--warn); }
+  @media (prefers-reduced-motion: reduce) { .toast { transition: opacity .25s; transform: translateX(-50%); } }
 </style>
 </head>
 <body>
@@ -378,6 +391,8 @@
     </div>
   </section>
 </div>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
 
 <script src="app.js"></script>
 </body>

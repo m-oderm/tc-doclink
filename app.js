@@ -1045,29 +1045,58 @@ function buildRuleFromForm() {
 // Cache des Modell-Scans verwerfen, weil sich die wirksame Regel geändert hat.
 function invalidateScan() { App.modelLists = null; App.fileObjects = null; }
 
+// Kurze, selbst ausblendende Rückmeldung. Startet die Animation bei jedem Aufruf
+// neu, damit auch ein erneuter Klick sichtbar quittiert wird.
+let toastTimer = null;
+function toast(msg, kind) {
+  const t = $("toast");
+  if (!t) return;
+  const icon = kind === "warn" ? "⚠" : "✓";
+  t.textContent = icon + "  " + msg;
+  t.className = "toast " + (kind === "warn" ? "warn" : "ok");
+  t.classList.remove("show");
+  void t.offsetWidth; // Reflow -> Animation auch bei gleichem Text neu
+  t.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove("show"), kind === "warn" ? 4000 : 2600);
+}
+
+// Führt fn aus und zeigt am Knopf solange einen Ladezustand.
+async function withBusy(btn, label, fn) {
+  if (!btn) return fn();
+  const prev = btn.textContent, wasDisabled = btn.disabled;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> ' + label;
+  try { return await fn(); }
+  finally { btn.disabled = wasDisabled; btn.textContent = prev; }
+}
+
 async function onSaveScope(scope) {
   const sh = $("save-hint");
   const rule = buildRuleFromForm();
   if (!rule) return;
+  const btn = $(scope === "project" ? "btn-save-project" : "btn-save-user");
   try {
-    await saveConfig(rule, scope);
-    sh.textContent = scope === "project" ? "Als Projekt-Standard gespeichert." : "Für dich gespeichert.";
-    sh.className = "hint ok";
+    await withBusy(btn, "Speichern…", () => saveConfig(rule, scope));
+    sh.textContent = ""; sh.className = "hint";
+    toast(scope === "project" ? "Als Projekt-Standard gespeichert" : "Für dich gespeichert", "ok");
     invalidateScan();
     ensureFileIndex(rule.targetFolderId, true).catch(() => {});
     renderConfigScopeState();
   } catch (e) {
     sh.textContent = e.message;
     sh.className = "hint warn";
+    toast("Speichern fehlgeschlagen", "warn");
   }
 }
 
 async function resetToProjectDefault() {
   const sh = $("save-hint");
+  const btn = $("btn-reset-default");
   try {
-    await deleteOverride();
-    sh.textContent = "Auf Projekt-Standard zurückgesetzt.";
-    sh.className = "hint ok";
+    await withBusy(btn, "Zurücksetzen…", () => deleteOverride());
+    sh.textContent = ""; sh.className = "hint";
+    toast("Auf Projekt-Standard zurückgesetzt", "ok");
     invalidateScan();
     fillConfigForm();
     renderConfigScopeState();
@@ -1075,6 +1104,7 @@ async function resetToProjectDefault() {
   } catch (e) {
     sh.textContent = e.message;
     sh.className = "hint warn";
+    toast("Zurücksetzen fehlgeschlagen", "warn");
   }
 }
 
