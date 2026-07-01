@@ -873,7 +873,7 @@ function transformPanelHTML(row, idx) {
     + '<details class="xform"' + (t ? " open" : "") + '>'
     + '<summary>Abgleich anpassen</summary>'
     + '<div class="xform-body">'
-    + '<p class="hint">Klicke die Teile des Werts an, nach denen gesucht werden soll.</p>'
+    + '<p class="hint">Alle Teile sind gewählt (blau = wird gesucht). Klicke die Teile ab, die nicht im Dateinamen stehen.</p>'
     + chips
     + '<label class="xform-check"><input type="checkbox" class="xform-ign"'
     + (ign ? " checked" : "") + ' /> Trennzeichen ignorieren (z. B. „/“ = „_“)</label>'
