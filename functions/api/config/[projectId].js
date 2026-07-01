@@ -23,6 +23,30 @@ const MAX_BODY = 16 * 1024; // 16 KB
 const MAX_RULES = 20;
 const MAX_KEYS = 3; // hoechstens drei Schluessel-Attribute pro Regel
 const MAX_FIELD = 512;
+const MAX_SEGMENTS = 64; // Obergrenze fuer Wert-Bausteine je Schluessel
+
+// Optionale Umformung eines Schluessels (Abgleich anpassen): { segments?, ignoreSep?, regex? }.
+// Nur bekannte, plausible Felder werden uebernommen; sonst undefined.
+function normalizeTransform(t) {
+  if (!t || typeof t !== "object") return undefined;
+  const out = {};
+  if (Array.isArray(t.segments)) {
+    const segs = [];
+    for (const n of t.segments.slice(0, MAX_SEGMENTS)) {
+      const i = Number(n);
+      if (Number.isInteger(i) && i >= 0 && i < MAX_SEGMENTS && !segs.includes(i)) segs.push(i);
+    }
+    if (segs.length) out.segments = segs.sort((a, b) => a - b);
+  }
+  if (t.ignoreSep === true) out.ignoreSep = true;
+  if (t.regex != null) {
+    const rx = String(t.regex).slice(0, MAX_FIELD);
+    if (rx) {
+      try { new RegExp(rx); out.regex = rx; } catch (e) { /* ungueltiges Muster -> weglassen */ }
+    }
+  }
+  return Object.keys(out).length ? out : undefined;
+}
 
 export async function onRequestGet(context) {
   const { params, env, request } = context;
@@ -238,6 +262,8 @@ function normalizeConfig(parsed, id) {
         if (k.attribute != null) key.attribute = String(k.attribute).slice(0, MAX_FIELD);
         if (!key.attribute) continue; // ohne Attribut nutzlos
         key.op = KEY_OPS.includes(String(k.op || "").toLowerCase()) ? String(k.op).toLowerCase() : "and";
+        const tf = normalizeTransform(k.transform);
+        if (tf) key.transform = tf;
         keys.push(key);
       }
       if (keys.length) {
