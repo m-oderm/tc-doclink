@@ -1095,7 +1095,7 @@ async function onSaveScope(scope) {
     toast(scope === "project" ? "Als Projekt-Standard gespeichert" : "Für dich gespeichert", "ok");
     invalidateScan();
     ensureFileIndex(rule.targetFolderId, true).catch(() => {});
-    renderConfigScopeState();
+    renderConfigScopeState(scope);
   } catch (e) {
     sh.textContent = e.message;
     sh.className = "hint warn";
@@ -1122,18 +1122,24 @@ async function resetToProjectDefault() {
 }
 
 // Hinweis zur Herkunft der Einstellungen und Sichtbarkeit des Admin-Knopfs setzen.
-function renderConfigScopeState() {
+// savedScope ("project"/"user") stellt nach dem Speichern eine kurze Bestaetigung
+// voran, damit die Aktion sichtbar quittiert wird (der Zustand selbst bleibt gleich).
+function renderConfigScopeState(savedScope) {
   const projBtn = $("btn-save-project");
   if (projBtn) projBtn.classList.toggle("hidden", !App.isAdmin);
   const note = $("cfg-scope-note");
   if (!note) return;
+  const ack = savedScope === "project" ? "Projekt-Standard gespeichert. "
+    : savedScope === "user" ? "Für dich gespeichert. " : "";
+  note.className = ack ? "hint ok" : "hint";
   if (App.hasOverride) {
-    note.innerHTML = "Du nutzt deine eigenen Einstellungen. "
+    note.innerHTML = ack + "Du nutzt " + (savedScope === "project" ? "weiterhin " : "")
+      + "deine eigenen Einstellungen. "
       + '<button class="linkbtn" id="btn-reset-default" type="button">Auf Projekt-Standard zurücksetzen</button>';
     const b = $("btn-reset-default");
     if (b) b.addEventListener("click", resetToProjectDefault);
   } else {
-    note.textContent = "Du nutzt die Projekt-Vorgabe.";
+    note.textContent = ack + "Du nutzt die Projekt-Vorgabe.";
   }
 }
 
